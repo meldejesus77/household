@@ -1,0 +1,140 @@
+export type Category = {
+  name: string;
+  color: string;
+  activities: string[];
+};
+
+export const categories: Category[] = [
+  {
+    name: "Indoor / Self-play",
+    color: "bg-violet-100 text-violet-800 border-violet-200",
+    activities: [
+      "Music (piano + uke)",
+      "Audio (music/stories)",
+      "Puzzles",
+      "Role-play (dolls/barn/trucks)",
+      "Dress up",
+      "Tracing / Coloring",
+      "Scissors / Maze",
+      "Water-wow / Magic screen",
+      "Watercolors",
+      "Sculpting (play-doh/clay)",
+      "Building (lego/magnets/abacus)",
+      "Cosmic Yoga",
+    ],
+  },
+  {
+    name: "Active & Outdoor",
+    color: "bg-green-100 text-green-800 border-green-200",
+    activities: [
+      "Walk",
+      "Park / Visit",
+      "Gymnastic bar",
+      "Ju Jitsu",
+      "Swim",
+      "Yard / Garden work",
+      "Trampoline",
+      "Fort building",
+      "Gymnastics",
+      "Bike / Scooter",
+    ],
+  },
+  {
+    name: "Creative & Sensory",
+    color: "bg-pink-100 text-pink-800 border-pink-200",
+    activities: [
+      "Color by number",
+      "Stencils",
+      "Lite-brite",
+      "Legos / Blocks",
+      "Play-doh / Kinetic sand",
+      "Drawing / Art",
+    ],
+  },
+  {
+    name: "Books & Reading",
+    color: "bg-amber-100 text-amber-800 border-amber-200",
+    activities: [
+      "Daddy read books",
+      "Self-reading",
+      "Large picture books",
+      "Audio stories",
+      "Leapfrog Pen books",
+    ],
+  },
+  {
+    name: "Games",
+    color: "bg-sky-100 text-sky-800 border-sky-200",
+    activities: [
+      "Family photo viewing",
+      "Pokémon / Chess",
+      "Puzzle",
+      "Story cards",
+      "Word search",
+      "Pretend play",
+      "Checkers",
+      "Bingo",
+      "Simon says",
+      "Boardgames",
+    ],
+  },
+  {
+    name: "Digital & Screen",
+    color: "bg-indigo-100 text-indigo-800 border-indigo-200",
+    activities: [
+      "IXL",
+      "Coding apps",
+      "Video games",
+      "TV / Show",
+      "iPad (Phonics/Tracing)",
+    ],
+  },
+  {
+    name: "Academic / With Guidance",
+    color: "bg-teal-100 text-teal-800 border-teal-200",
+    activities: [
+      "Math homework",
+      "Story writing",
+      "Phonics",
+      "Reading / Math workbooks",
+      "Tracing / Writing",
+      "Math rods",
+      "Spanish",
+      "Violin / Piano",
+      "Beast Academy",
+      "MagnifiKid",
+      "Moon Journaling",
+      "Experiments",
+    ],
+  },
+  {
+    name: "Food",
+    color: "bg-orange-100 text-orange-800 border-orange-200",
+    activities: ["Breakfast", "Snack", "Lunch", "Dinner", "Smoothie"],
+  },
+  {
+    name: "Routine & Reset",
+    color: "bg-rose-100 text-rose-800 border-rose-200",
+    activities: [
+      "Bath",
+      "Relaxation activity",
+      "Cleaning house",
+      "Cooking",
+      "Make bed",
+    ],
+  },
+  {
+    name: "Outings & Errands",
+    color: "bg-lime-100 text-lime-800 border-lime-200",
+    activities: [
+      "Duke Park",
+      "Watts",
+      "East Campus",
+      "Ninth St",
+      "Mass",
+      "Car errands",
+      "Home Depot",
+      "Roscoe Bath",
+    ],
+  },
+];
