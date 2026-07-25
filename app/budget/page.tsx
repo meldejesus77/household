@@ -2,6 +2,48 @@ export default function BudgetPage() {
   return (
     <>
       <style>{`
+        .budget-sticky {
+          position: sticky;
+          top: 0;
+          z-index: 100;
+          background: #1a1a1a;
+          color: #fff;
+          display: flex;
+          align-items: center;
+          gap: 0;
+          padding: 0 1.25rem;
+          height: 52px;
+          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+          font-size: 0.82rem;
+          box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+        }
+        .sticky-home {
+          background: none;
+          border: 1px solid rgba(255,255,255,0.18);
+          color: rgba(255,255,255,0.75);
+          border-radius: 5px;
+          padding: 0.3rem 0.75rem;
+          font-size: 0.78rem;
+          cursor: pointer;
+          text-decoration: none;
+          margin-right: 1.25rem;
+          white-space: nowrap;
+          transition: background 0.15s;
+        }
+        .sticky-home:hover { background: rgba(255,255,255,0.08); }
+        .sticky-divider {
+          width: 1px;
+          height: 28px;
+          background: rgba(255,255,255,0.12);
+          margin: 0 1.25rem;
+        }
+        .sticky-stat { display: flex; flex-direction: column; gap: 1px; }
+        .sticky-stat .label { font-size: 0.67rem; text-transform: uppercase; letter-spacing: 0.07em; color: rgba(255,255,255,0.4); }
+        .sticky-stat .value { font-size: 0.88rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+        .sticky-stat.expenses .value { color: #f28b70; }
+        .sticky-stat.income   .value { color: #6ecfa8; }
+        .sticky-stat.gap      .value { color: #ffd17a; }
+        .sticky-spacer { flex: 1; }
         .budget-wrap * { box-sizing: border-box; margin: 0; padding: 0; }
         .budget-wrap {
           font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -114,6 +156,26 @@ export default function BudgetPage() {
         .budget-wrap tr.gap-row td { color: #555; }
         .summary table td { padding: 0.55rem 1rem; }
       `}</style>
+
+      <div className="budget-sticky">
+        <a href="/" className="sticky-home">← Home</a>
+        <div className="sticky-divider" />
+        <div className="sticky-stat expenses">
+          <span className="label">Total Expenses</span>
+          <span className="value">$9,067 / mo</span>
+        </div>
+        <div className="sticky-divider" />
+        <div className="sticky-stat income">
+          <span className="label">Total Income</span>
+          <span className="value">$10,258 / mo</span>
+        </div>
+        <div className="sticky-divider" />
+        <div className="sticky-stat gap">
+          <span className="label">Gap</span>
+          <span className="value">$1,191 / mo</span>
+        </div>
+        <div className="sticky-spacer" />
+      </div>
 
       <div className="budget-wrap">
         <h1>Annual Budget</h1>
