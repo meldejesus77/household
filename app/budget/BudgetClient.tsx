@@ -100,6 +100,15 @@ const DEFAULTS: Record<string, number> = {
 // IDs that are null/missing (show "—" in view, 0 in edit input)
 const NULL_IDS = new Set(['hooked-on-phonics', 'simply-piano']);
 
+// ---------------------------------------------------------------------------
+// PROFILES — add new entries here to support more budget views
+// ---------------------------------------------------------------------------
+const PROFILES = [
+  { id: 'day-to-day',  label: 'Day-to-Day',  description: 'Current household budget' },
+  { id: 'retirement',  label: 'Retirement',   description: 'Projected retirement budget' },
+] as const;
+type ProfileId = typeof PROFILES[number]['id'];
+
 interface Snapshot {
   title: string;
   rationale: string;
@@ -111,6 +120,7 @@ const fmt = (n: number) =>
   n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 export default function BudgetClient() {
+  const [activeProfile, setActiveProfile] = useState<ProfileId>('day-to-day');
   const [overrides, setOverrides] = useState<Record<string, number>>({});
   const [mode, setMode] = useState<'view' | 'edit'>('view');
   const [showModal, setShowModal] = useState(false);
@@ -118,13 +128,17 @@ export default function BudgetClient() {
   const [modalRationale, setModalRationale] = useState('');
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
 
-  // Load snapshots from localStorage on mount
+  const snapshotKey = `budget_snapshots_${activeProfile}`;
+
+  // Load snapshots whenever the active profile changes
   useEffect(() => {
     try {
-      const raw = localStorage.getItem('budget_snapshots');
-      if (raw) setSnapshots(JSON.parse(raw));
+      const raw = localStorage.getItem(snapshotKey);
+      setSnapshots(raw ? JSON.parse(raw) : []);
     } catch {}
-  }, []);
+    setOverrides({});
+    setMode('view');
+  }, [activeProfile]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---------------------------------------------------------------------------
   // Helpers
@@ -227,7 +241,7 @@ export default function BudgetClient() {
     };
     const next = [snap, ...snapshots];
     setSnapshots(next);
-    localStorage.setItem('budget_snapshots', JSON.stringify(next));
+    localStorage.setItem(snapshotKey, JSON.stringify(next));
     setShowModal(false);
     setModalTitle('');
     setModalRationale('');
@@ -241,7 +255,7 @@ export default function BudgetClient() {
   function deleteSnapshot(idx: number) {
     const next = snapshots.filter((_, i) => i !== idx);
     setSnapshots(next);
-    localStorage.setItem('budget_snapshots', JSON.stringify(next));
+    localStorage.setItem(snapshotKey, JSON.stringify(next));
   }
 
   function resetToDefaults() {
@@ -344,6 +358,26 @@ export default function BudgetClient() {
         .sticky-btn.record:hover { background: rgba(242,139,112,0.12); }
         .sticky-btn.reset { border-color: #ffd17a; color: #ffd17a; }
         .sticky-btn.reset:hover { background: rgba(255,209,122,0.10); }
+        .profile-switcher {
+          display: flex;
+          align-items: center;
+          gap: 4px;
+          margin-right: 0.75rem;
+        }
+        .profile-tab {
+          background: none;
+          border: 1px solid rgba(255,255,255,0.15);
+          color: rgba(255,255,255,0.5);
+          border-radius: 5px;
+          padding: 0.25rem 0.7rem;
+          font-size: 0.75rem;
+          cursor: pointer;
+          font-family: inherit;
+          transition: all 0.15s;
+          white-space: nowrap;
+        }
+        .profile-tab:hover { color: rgba(255,255,255,0.8); border-color: rgba(255,255,255,0.3); }
+        .profile-tab.active { background: rgba(255,255,255,0.12); border-color: rgba(255,255,255,0.45); color: #fff; font-weight: 600; }
         .budget-wrap * { box-sizing: border-box; margin: 0; padding: 0; }
         .budget-wrap {
           font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -593,6 +627,18 @@ export default function BudgetClient() {
       <div className="budget-sticky">
         <a href="/" className="sticky-home">← Home</a>
         <div className="sticky-divider" />
+        <div className="profile-switcher">
+          {PROFILES.map(p => (
+            <button
+              key={p.id}
+              className={`profile-tab${activeProfile === p.id ? ' active' : ''}`}
+              onClick={() => setActiveProfile(p.id)}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+        <div className="sticky-divider" />
         <div className="sticky-stat expenses">
           <span className="label">Total Expenses</span>
           <span className="value">${fmt(totalExpenses)} / mo</span>
@@ -674,7 +720,7 @@ export default function BudgetClient() {
       )}
 
       <div className={`budget-wrap${mode === 'edit' ? ' has-edit-bar' : ''}`}>
-        <h1>Annual Budget</h1>
+        <h1>Annual Budget — {PROFILES.find(p => p.id === activeProfile)?.label}</h1>
         <p className="subtitle">2026 · All amounts annualized</p>
 
         <div className="notice">
