@@ -3,19 +3,21 @@ export default function BudgetPage() {
     <>
       <style>{`
         .budget-sticky {
-          position: sticky;
+          position: fixed;
           top: 0;
-          z-index: 100;
+          left: 0;
+          right: 0;
+          z-index: 200;
           background: #1a1a1a;
           color: #fff;
           display: flex;
           align-items: center;
           gap: 0;
           padding: 0 1.25rem;
-          height: 52px;
+          height: 48px;
           font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
           font-size: 0.82rem;
-          box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+          box-shadow: 0 2px 8px rgba(0,0,0,0.35);
         }
         .sticky-home {
           background: none;
@@ -50,6 +52,7 @@ export default function BudgetPage() {
           background: #f5f5f0;
           color: #222;
           padding: 2rem;
+          padding-top: 4rem;
           max-width: 1200px;
           margin: 0 auto;
         }
@@ -404,9 +407,6 @@ export default function BudgetPage() {
                 <tr><td className="label">House &amp; Car</td><td className="amount monthly">$1,949.75</td><td className="amount">$23,397.00</td><td className="notes"></td></tr>
                 <tr><td className="label">Shopping</td><td className="amount monthly">$700.00</td><td className="amount">$8,400.00</td><td className="notes"></td></tr>
                 <tr><td className="label">Unique Expenses</td><td className="amount monthly">$500.00</td><td className="amount">$6,000.00</td><td className="notes"></td></tr>
-                <tr className="expense-row subtotal-row"><td className="label">Total Expenses</td><td className="amount monthly">$9,067.15</td><td className="amount">$108,805.76</td><td className="notes">Some subscription amounts still unknown</td></tr>
-                <tr className="income-row subtotal-row"><td className="label">Total Income</td><td className="amount monthly">$10,258.33</td><td className="amount">$123,100.00</td><td className="notes"></td></tr>
-                <tr className="total-row gap-row"><td className="label">Gap (unallocated / missing)</td><td className="amount monthly">$1,191.19</td><td className="amount">$14,294.24</td><td className="notes">Likely absorbed by missing taxes owed and unknown subscriptions</td></tr>
               </tbody>
             </table>
           </div>
