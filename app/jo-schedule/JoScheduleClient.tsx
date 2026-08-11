@@ -1,7 +1,9 @@
 "use client";
 
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
-import { categories as baseCategories } from "./data";
+import { categories as baseCategories, Activity } from "./data";
+
+type FilterMode = "all" | "solo" | "notSolo";
 
 type ScheduleItem = {
   id: string;
@@ -32,10 +34,17 @@ function parseTime(startTime: string, offsetMinutes: number): string {
   return `${hour}:${m.toString().padStart(2, "0")} ${ampm}`;
 }
 
+function matchesFilter(activity: Activity, filter: FilterMode): boolean {
+  if (filter === "all") return true;
+  if (filter === "solo") return activity.solo;
+  return activity.notSolo;
+}
+
 export default function JoScheduleClient() {
   const [selected, setSelected] = useState<ScheduleItem[]>([]);
   const [startTime, setStartTime] = useState("08:00");
   const [showPrint, setShowPrint] = useState(false);
+  const [filter, setFilter] = useState<FilterMode>("all");
   const [editMode, setEditMode] = useState(false);
   const [customActivities, setCustomActivities] = useState<CustomActivity[]>([]);
   const [trashedActivities, setTrashedActivities] = useState<TrashedActivity[]>([]);
@@ -43,7 +52,6 @@ export default function JoScheduleClient() {
   const [newActivityName, setNewActivityName] = useState("");
   const [showTrash, setShowTrash] = useState(false);
 
-  // Skip first save so we don't overwrite localStorage before loading
   const skipSave = useRef(true);
 
   useEffect(() => {
@@ -56,49 +64,50 @@ export default function JoScheduleClient() {
   }, []);
 
   useEffect(() => {
-    if (skipSave.current) {
-      skipSave.current = false;
-      return;
-    }
+    if (skipSave.current) { skipSave.current = false; return; }
     localStorage.setItem("jo-custom-activities", JSON.stringify(customActivities));
     localStorage.setItem("jo-trashed-activities", JSON.stringify(trashedActivities));
   }, [customActivities, trashedActivities]);
 
   const displayedCategories = useMemo(() => {
-    return baseCategories.map((cat) => {
-      const extras = customActivities
-        .filter((c) => c.categoryName === cat.name)
-        .map((c) => c.activity);
-      const trashed = new Set(
-        trashedActivities
-          .filter((t) => t.categoryName === cat.name)
-          .map((t) => t.activity)
-      );
-      return {
-        ...cat,
-        activities: [...cat.activities, ...extras].filter((a) => !trashed.has(a)),
-      };
-    });
-  }, [customActivities, trashedActivities]);
+    return baseCategories
+      .map((cat) => {
+        const extras: Activity[] = customActivities
+          .filter((c) => c.categoryName === cat.name)
+          .map((c) => ({ name: c.activity, solo: true, notSolo: true }));
+        const trashed = new Set(
+          trashedActivities
+            .filter((t) => t.categoryName === cat.name)
+            .map((t) => t.activity)
+        );
+        return {
+          ...cat,
+          activities: [...cat.activities, ...extras].filter(
+            (a) => !trashed.has(a.name) && matchesFilter(a, filter)
+          ),
+        };
+      })
+      .filter((cat) => cat.activities.length > 0);
+  }, [customActivities, trashedActivities, filter]);
 
   const isCustom = useCallback(
-    (categoryName: string, activity: string) =>
+    (categoryName: string, name: string) =>
       customActivities.some(
-        (c) => c.categoryName === categoryName && c.activity === activity
+        (c) => c.categoryName === categoryName && c.activity === name
       ),
     [customActivities]
   );
 
   const toggleActivity = useCallback(
-    (activity: string, categoryName: string, categoryColor: string) => {
+    (name: string, categoryName: string, categoryColor: string) => {
       setSelected((prev) => {
-        const exists = prev.find((s) => s.activity === activity);
-        if (exists) return prev.filter((s) => s.activity !== activity);
+        const exists = prev.find((s) => s.activity === name);
+        if (exists) return prev.filter((s) => s.activity !== name);
         return [
           ...prev,
           {
-            id: `${categoryName}-${activity}-${Date.now()}`,
-            activity,
+            id: `${categoryName}-${name}-${Date.now()}`,
+            activity: name,
             category: categoryName,
             categoryColor,
             duration: 30,
@@ -109,18 +118,13 @@ export default function JoScheduleClient() {
     []
   );
 
-  const isSelected = (activity: string) =>
-    selected.some((s) => s.activity === activity);
+  const isSelected = (name: string) => selected.some((s) => s.activity === name);
 
-  const updateDuration = (id: string, duration: number) => {
-    setSelected((prev) =>
-      prev.map((s) => (s.id === id ? { ...s, duration } : s))
-    );
-  };
+  const updateDuration = (id: string, duration: number) =>
+    setSelected((prev) => prev.map((s) => (s.id === id ? { ...s, duration } : s)));
 
-  const removeItem = (id: string) => {
+  const removeItem = (id: string) =>
     setSelected((prev) => prev.filter((s) => s.id !== id));
-  };
 
   const moveItem = (index: number, dir: -1 | 1) => {
     setSelected((prev) => {
@@ -134,25 +138,22 @@ export default function JoScheduleClient() {
 
   const clearAll = () => setSelected([]);
 
-  const trashActivity = (categoryName: string, activity: string, color: string) => {
-    setSelected((prev) => prev.filter((s) => s.activity !== activity));
+  const trashActivity = (categoryName: string, name: string, color: string) => {
+    setSelected((prev) => prev.filter((s) => s.activity !== name));
     setCustomActivities((prev) =>
-      prev.filter(
-        (c) => !(c.categoryName === categoryName && c.activity === activity)
-      )
+      prev.filter((c) => !(c.categoryName === categoryName && c.activity === name))
     );
-    setTrashedActivities((prev) => [...prev, { categoryName, activity, color }]);
+    setTrashedActivities((prev) => [...prev, { categoryName, activity: name, color }]);
   };
 
   const restoreActivity = (item: TrashedActivity) => {
     setTrashedActivities((prev) =>
       prev.filter(
-        (t) =>
-          !(t.categoryName === item.categoryName && t.activity === item.activity)
+        (t) => !(t.categoryName === item.categoryName && t.activity === item.activity)
       )
     );
-    const baseCategory = baseCategories.find((c) => c.name === item.categoryName);
-    const isBase = baseCategory?.activities.includes(item.activity);
+    const base = baseCategories.find((c) => c.name === item.categoryName);
+    const isBase = base?.activities.some((a) => a.name === item.activity);
     if (!isBase) {
       setCustomActivities((prev) => [
         ...prev,
@@ -161,24 +162,19 @@ export default function JoScheduleClient() {
     }
   };
 
-  const cancelAdding = () => {
-    setAddingTo(null);
-    setNewActivityName("");
-  };
+  const cancelAdding = () => { setAddingTo(null); setNewActivityName(""); };
 
   const addActivity = (categoryName: string) => {
-    const activity = newActivityName.trim();
-    if (!activity) { cancelAdding(); return; }
+    const name = newActivityName.trim();
+    if (!name) { cancelAdding(); return; }
     const cat = displayedCategories.find((c) => c.name === categoryName);
-    if (cat?.activities.includes(activity)) { cancelAdding(); return; }
+    if (cat?.activities.some((a) => a.name === name)) { cancelAdding(); return; }
     setTrashedActivities((prev) =>
-      prev.filter(
-        (t) => !(t.categoryName === categoryName && t.activity === activity)
-      )
+      prev.filter((t) => !(t.categoryName === categoryName && t.activity === name))
     );
-    const baseCategory = baseCategories.find((c) => c.name === categoryName);
-    if (!baseCategory?.activities.includes(activity)) {
-      setCustomActivities((prev) => [...prev, { categoryName, activity }]);
+    const base = baseCategories.find((c) => c.name === categoryName);
+    if (!base?.activities.some((a) => a.name === name)) {
+      setCustomActivities((prev) => [...prev, { categoryName, activity: name }]);
     }
     cancelAdding();
   };
@@ -234,15 +230,35 @@ export default function JoScheduleClient() {
     );
   }
 
+  const filterLabels: Record<FilterMode, string> = {
+    all: "All",
+    solo: "On my own",
+    notSolo: "With someone",
+  };
+
   return (
     <div className="max-w-6xl mx-auto px-4 py-6">
-      <div className="flex items-start justify-between mb-1">
-        <h1 className="text-2xl font-bold text-gray-900">Jo&apos;s Schedule Builder</h1>
+      <div className="flex items-start justify-between mb-4">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900 mb-1">Jo&apos;s Schedule Builder</h1>
+          <div className="flex gap-2">
+            {(["all", "solo", "notSolo"] as FilterMode[]).map((mode) => (
+              <button
+                key={mode}
+                onClick={() => setFilter(mode)}
+                className={`px-4 py-1.5 rounded-full text-sm font-medium border transition-colors ${
+                  filter === mode
+                    ? "bg-blue-600 text-white border-blue-600"
+                    : "border-gray-300 text-gray-600 hover:bg-gray-50"
+                }`}
+              >
+                {filterLabels[mode]}
+              </button>
+            ))}
+          </div>
+        </div>
         <button
-          onClick={() => {
-            setEditMode((m) => !m);
-            cancelAdding();
-          }}
+          onClick={() => { setEditMode((m) => !m); cancelAdding(); }}
           className={`text-sm px-3 py-1.5 rounded-lg border font-medium transition-colors ${
             editMode
               ? "bg-gray-900 text-white border-gray-900"
@@ -252,6 +268,7 @@ export default function JoScheduleClient() {
           {editMode ? "Done editing" : "Edit list"}
         </button>
       </div>
+
       <p className="text-gray-500 text-sm mb-6">
         {editMode
           ? "Click the x on any chip to send it to trash. Use + Add to create new ones."
@@ -268,14 +285,14 @@ export default function JoScheduleClient() {
               </h2>
               <div className="flex flex-wrap gap-2">
                 {cat.activities.map((activity) => {
-                  const sel = isSelected(activity);
-                  const custom = isCustom(cat.name, activity);
+                  const sel = isSelected(activity.name);
+                  const custom = isCustom(cat.name, activity.name);
                   return (
-                    <div key={activity} className="relative">
+                    <div key={activity.name} className="relative">
                       <button
                         onClick={() => {
                           if (!editMode)
-                            toggleActivity(activity, cat.name, cat.color);
+                            toggleActivity(activity.name, cat.name, cat.color);
                         }}
                         className={`px-3 py-1.5 rounded-full text-sm border font-medium transition-all ${
                           editMode
@@ -285,12 +302,12 @@ export default function JoScheduleClient() {
                             : `${cat.color} hover:opacity-80 border ${custom ? "border-dashed" : ""}`
                         }`}
                       >
-                        {activity}
+                        {activity.name}
                         {!editMode && sel && <span className="ml-1 text-xs">✓</span>}
                       </button>
                       {editMode && (
                         <button
-                          onClick={() => trashActivity(cat.name, activity, cat.color)}
+                          onClick={() => trashActivity(cat.name, activity.name, cat.color)}
                           title="Send to trash"
                           className="absolute -top-1 -right-1 w-4 h-4 flex items-center justify-center rounded-full bg-white border border-gray-300 text-gray-400 hover:bg-red-50 hover:border-red-300 hover:text-red-500 text-xs leading-none shadow-sm transition-colors"
                         >
@@ -315,18 +332,8 @@ export default function JoScheduleClient() {
                         placeholder="Activity name…"
                         className="border border-gray-300 rounded-full px-3 py-1 text-sm w-40 focus:outline-none focus:border-blue-400"
                       />
-                      <button
-                        onClick={() => addActivity(cat.name)}
-                        className="text-green-600 hover:text-green-800 text-sm font-bold"
-                      >
-                        ✓
-                      </button>
-                      <button
-                        onClick={cancelAdding}
-                        className="text-gray-400 hover:text-gray-600 text-sm"
-                      >
-                        ✕
-                      </button>
+                      <button onClick={() => addActivity(cat.name)} className="text-green-600 hover:text-green-800 text-sm font-bold">✓</button>
+                      <button onClick={cancelAdding} className="text-gray-400 hover:text-gray-600 text-sm">✕</button>
                     </div>
                   ) : (
                     <button
@@ -341,7 +348,6 @@ export default function JoScheduleClient() {
             </div>
           ))}
 
-          {/* Trash Bin */}
           {trashedActivities.length > 0 && (
             <div className="mt-6 pt-4 border-t border-gray-100">
               <button
@@ -385,10 +391,7 @@ export default function JoScheduleClient() {
               <div className="flex items-center justify-between mb-3">
                 <h2 className="font-semibold text-gray-900">Schedule</h2>
                 {selected.length > 0 && (
-                  <button
-                    onClick={clearAll}
-                    className="text-xs text-red-500 hover:text-red-700"
-                  >
+                  <button onClick={clearAll} className="text-xs text-red-500 hover:text-red-700">
                     Clear all
                   </button>
                 )}
@@ -434,9 +437,7 @@ export default function JoScheduleClient() {
                         </button>
                       </div>
                       <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-gray-900 truncate">
-                          {item.activity}
-                        </p>
+                        <p className="text-sm font-medium text-gray-900 truncate">{item.activity}</p>
                         <p className="text-xs text-gray-400 truncate">{item.category}</p>
                       </div>
                       <input
@@ -445,9 +446,7 @@ export default function JoScheduleClient() {
                         max={240}
                         step={5}
                         value={item.duration}
-                        onChange={(e) =>
-                          updateDuration(item.id, parseInt(e.target.value) || 30)
-                        }
+                        onChange={(e) => updateDuration(item.id, parseInt(e.target.value) || 30)}
                         className="w-14 border border-gray-300 rounded px-1 py-0.5 text-xs text-center"
                       />
                       <span className="text-xs text-gray-400">min</span>
@@ -466,9 +465,7 @@ export default function JoScheduleClient() {
                 <div className="border-t border-gray-100 pt-3">
                   <div className="flex justify-between text-xs text-gray-500 mb-3">
                     <span>{selected.length} activities</span>
-                    <span>
-                      {selected.reduce((a, s) => a + s.duration, 0)} min total
-                    </span>
+                    <span>{selected.reduce((a, s) => a + s.duration, 0)} min total</span>
                   </div>
                   <button
                     onClick={() => setShowPrint(true)}
