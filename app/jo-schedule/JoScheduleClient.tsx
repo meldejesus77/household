@@ -24,6 +24,9 @@ type TrashedActivity = {
   color: string;
 };
 
+const MY_ACTIVITIES_KEY = "My Activities";
+const MY_COLOR = "bg-yellow-100 text-yellow-800 border-yellow-200";
+
 function parseTime(startTime: string, offsetMinutes: number): string {
   const [hStr, mStr] = startTime.split(":");
   const totalMinutes = parseInt(hStr) * 60 + parseInt(mStr) + offsetMinutes;
@@ -34,10 +37,21 @@ function parseTime(startTime: string, offsetMinutes: number): string {
   return `${hour}:${m.toString().padStart(2, "0")} ${ampm}`;
 }
 
-function matchesFilter(activity: Activity, filter: FilterMode): boolean {
+function matchesFilter(a: Activity, filter: FilterMode): boolean {
   if (filter === "all") return true;
-  if (filter === "solo") return activity.solo;
-  return activity.notSolo;
+  if (filter === "solo") return a.solo;
+  return a.notSolo;
+}
+
+// Group activities by their sub field, preserving insertion order
+function groupBySub(activities: Activity[]): Map<string, Activity[]> {
+  const map = new Map<string, Activity[]>();
+  for (const a of activities) {
+    const key = a.sub ?? "";
+    if (!map.has(key)) map.set(key, []);
+    map.get(key)!.push(a);
+  }
+  return map;
 }
 
 export default function JoScheduleClient() {
@@ -51,6 +65,9 @@ export default function JoScheduleClient() {
   const [addingTo, setAddingTo] = useState<string | null>(null);
   const [newActivityName, setNewActivityName] = useState("");
   const [showTrash, setShowTrash] = useState(false);
+  // My Activities quick-add (always visible, no edit mode needed)
+  const [myNewName, setMyNewName] = useState("");
+  const [showMyAdd, setShowMyAdd] = useState(false);
 
   const skipSave = useRef(true);
 
@@ -69,26 +86,51 @@ export default function JoScheduleClient() {
     localStorage.setItem("jo-trashed-activities", JSON.stringify(trashedActivities));
   }, [customActivities, trashedActivities]);
 
+  const trashedSet = useMemo(
+    () => new Set(trashedActivities.map((t) => `${t.categoryName}::${t.activity}`)),
+    [trashedActivities]
+  );
+
   const displayedCategories = useMemo(() => {
     return baseCategories
       .map((cat) => {
         const extras: Activity[] = customActivities
           .filter((c) => c.categoryName === cat.name)
           .map((c) => ({ name: c.activity, solo: true, notSolo: true }));
-        const trashed = new Set(
-          trashedActivities
-            .filter((t) => t.categoryName === cat.name)
-            .map((t) => t.activity)
-        );
         return {
           ...cat,
           activities: [...cat.activities, ...extras].filter(
-            (a) => !trashed.has(a.name) && matchesFilter(a, filter)
+            (a) =>
+              !trashedSet.has(`${cat.name}::${a.name}`) &&
+              matchesFilter(a, filter)
           ),
         };
       })
       .filter((cat) => cat.activities.length > 0);
-  }, [customActivities, trashedActivities, filter]);
+  }, [customActivities, trashedSet, filter]);
+
+  // My Activities — custom items under the MY_ACTIVITIES_KEY bucket
+  const myActivities: Activity[] = useMemo(() => {
+    return customActivities
+      .filter(
+        (c) =>
+          c.categoryName === MY_ACTIVITIES_KEY &&
+          !trashedSet.has(`${MY_ACTIVITIES_KEY}::${c.activity}`)
+      )
+      .map((c) => ({ name: c.activity, solo: true, notSolo: true }));
+  }, [customActivities, trashedSet]);
+
+  const addMyActivity = () => {
+    const name = myNewName.trim();
+    if (!name) { setShowMyAdd(false); return; }
+    if (myActivities.some((a) => a.name === name)) { setMyNewName(""); setShowMyAdd(false); return; }
+    setCustomActivities((prev) => [
+      ...prev,
+      { categoryName: MY_ACTIVITIES_KEY, activity: name },
+    ]);
+    setMyNewName("");
+    setShowMyAdd(false);
+  };
 
   const isCustom = useCallback(
     (categoryName: string, name: string) =>
@@ -191,18 +233,8 @@ export default function JoScheduleClient() {
     return (
       <div className="max-w-2xl mx-auto px-4 py-8">
         <div className="no-print flex gap-3 mb-6">
-          <button
-            onClick={() => window.print()}
-            className="bg-blue-600 text-white px-4 py-2 rounded font-medium hover:bg-blue-700"
-          >
-            Print
-          </button>
-          <button
-            onClick={() => setShowPrint(false)}
-            className="border border-gray-300 px-4 py-2 rounded font-medium hover:bg-gray-50"
-          >
-            Back to Editor
-          </button>
+          <button onClick={() => window.print()} className="bg-blue-600 text-white px-4 py-2 rounded font-medium hover:bg-blue-700">Print</button>
+          <button onClick={() => setShowPrint(false)} className="border border-gray-300 px-4 py-2 rounded font-medium hover:bg-gray-50">Back to Editor</button>
         </div>
         <h1 className="text-2xl font-bold mb-1 text-gray-900">Jo&apos;s Day Schedule</h1>
         <p className="text-gray-500 mb-6 text-sm">Starting at {parseTime(startTime, 0)}</p>
@@ -217,9 +249,7 @@ export default function JoScheduleClient() {
           <tbody>
             {scheduleBlocks.map((block) => (
               <tr key={block.id} className="border-b border-gray-200">
-                <td className="py-2.5 pr-4 text-gray-600 font-mono text-xs whitespace-nowrap">
-                  {block.start} – {block.end}
-                </td>
+                <td className="py-2.5 pr-4 text-gray-600 font-mono text-xs whitespace-nowrap">{block.start} – {block.end}</td>
                 <td className="py-2.5 pr-4 font-medium text-gray-900">{block.activity}</td>
                 <td className="py-2.5 text-gray-500">{block.duration} min</td>
               </tr>
@@ -236,11 +266,52 @@ export default function JoScheduleClient() {
     notSolo: "With someone",
   };
 
+  function renderChips(
+    activities: Activity[],
+    categoryName: string,
+    color: string,
+    showEditControls: boolean
+  ) {
+    return activities.map((activity) => {
+      const sel = isSelected(activity.name);
+      const custom = isCustom(categoryName, activity.name);
+      return (
+        <div key={activity.name} className="relative">
+          <button
+            onClick={() => {
+              if (!editMode || !showEditControls)
+                toggleActivity(activity.name, categoryName, color);
+            }}
+            className={`px-3 py-1.5 rounded-full text-sm border font-medium transition-all ${
+              editMode && showEditControls
+                ? `${color} opacity-75 cursor-default pr-6 ${custom ? "border-dashed" : ""}`
+                : sel
+                ? "bg-blue-600 text-white border-blue-600 shadow-sm"
+                : `${color} hover:opacity-80 border ${custom ? "border-dashed" : ""}`
+            }`}
+          >
+            {activity.name}
+            {!(editMode && showEditControls) && sel && <span className="ml-1 text-xs">✓</span>}
+          </button>
+          {editMode && showEditControls && (
+            <button
+              onClick={() => trashActivity(categoryName, activity.name, color)}
+              title="Send to trash"
+              className="absolute -top-1 -right-1 w-4 h-4 flex items-center justify-center rounded-full bg-white border border-gray-300 text-gray-400 hover:bg-red-50 hover:border-red-300 hover:text-red-500 text-xs leading-none shadow-sm transition-colors"
+            >
+              ✕
+            </button>
+          )}
+        </div>
+      );
+    });
+  }
+
   return (
     <div className="max-w-6xl mx-auto px-4 py-6">
       <div className="flex items-start justify-between mb-4">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900 mb-1">Jo&apos;s Schedule Builder</h1>
+          <h1 className="text-2xl font-bold text-gray-900 mb-2">Jo&apos;s Schedule Builder</h1>
           <div className="flex gap-2">
             {(["all", "solo", "notSolo"] as FilterMode[]).map((mode) => (
               <button
@@ -271,111 +342,171 @@ export default function JoScheduleClient() {
 
       <p className="text-gray-500 text-sm mb-6">
         {editMode
-          ? "Click the x on any chip to send it to trash. Use + Add to create new ones."
-          : "Click activities to add them to the schedule. Reorder, set durations, then generate."}
+          ? "Click ✕ on any chip to remove it. Use + Add to add to a category."
+          : "Click activities to add them to your schedule. Set durations, then generate."}
       </p>
 
       <div className="flex flex-col lg:flex-row gap-6">
         {/* Activity Picker */}
         <div className="flex-1 min-w-0">
-          {displayedCategories.map((cat) => (
-            <div key={cat.name} className="mb-5">
-              <h2 className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">
-                {cat.name}
-              </h2>
-              <div className="flex flex-wrap gap-2">
-                {cat.activities.map((activity) => {
-                  const sel = isSelected(activity.name);
-                  const custom = isCustom(cat.name, activity.name);
-                  return (
-                    <div key={activity.name} className="relative">
-                      <button
-                        onClick={() => {
-                          if (!editMode)
-                            toggleActivity(activity.name, cat.name, cat.color);
-                        }}
-                        className={`px-3 py-1.5 rounded-full text-sm border font-medium transition-all ${
-                          editMode
-                            ? `${cat.color} opacity-75 cursor-default pr-6 ${custom ? "border-dashed" : ""}`
-                            : sel
-                            ? "bg-blue-600 text-white border-blue-600 shadow-sm"
-                            : `${cat.color} hover:opacity-80 border ${custom ? "border-dashed" : ""}`
-                        }`}
-                      >
-                        {activity.name}
-                        {!editMode && sel && <span className="ml-1 text-xs">✓</span>}
-                      </button>
-                      {editMode && (
-                        <button
-                          onClick={() => trashActivity(cat.name, activity.name, cat.color)}
-                          title="Send to trash"
-                          className="absolute -top-1 -right-1 w-4 h-4 flex items-center justify-center rounded-full bg-white border border-gray-300 text-gray-400 hover:bg-red-50 hover:border-red-300 hover:text-red-500 text-xs leading-none shadow-sm transition-colors"
-                        >
-                          ✕
-                        </button>
-                      )}
-                    </div>
-                  );
-                })}
 
-                {editMode && (
-                  addingTo === cat.name ? (
-                    <div className="flex items-center gap-1">
-                      <input
-                        autoFocus
-                        value={newActivityName}
-                        onChange={(e) => setNewActivityName(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") addActivity(cat.name);
-                          if (e.key === "Escape") cancelAdding();
-                        }}
-                        placeholder="Activity name…"
-                        className="border border-gray-300 rounded-full px-3 py-1 text-sm w-40 focus:outline-none focus:border-blue-400"
-                      />
-                      <button onClick={() => addActivity(cat.name)} className="text-green-600 hover:text-green-800 text-sm font-bold">✓</button>
-                      <button onClick={cancelAdding} className="text-gray-400 hover:text-gray-600 text-sm">✕</button>
-                    </div>
-                  ) : (
+          {/* My Activities — always visible, no edit mode required */}
+          <div className="mb-6 p-3 rounded-xl border border-yellow-200 bg-yellow-50">
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="text-xs font-semibold uppercase tracking-wide text-yellow-700">
+                My Activities
+              </h2>
+              {!showMyAdd && (
+                <button
+                  onClick={() => setShowMyAdd(true)}
+                  className="text-xs text-yellow-600 hover:text-yellow-800 font-medium border border-yellow-300 rounded-full px-2 py-0.5 hover:bg-yellow-100 transition-colors"
+                >
+                  + Add mine
+                </button>
+              )}
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              {myActivities.map((activity) => {
+                const sel = isSelected(activity.name);
+                return (
+                  <div key={activity.name} className="relative">
                     <button
-                      onClick={() => setAddingTo(cat.name)}
-                      className="px-3 py-1.5 rounded-full text-sm border border-dashed border-gray-300 text-gray-400 hover:border-gray-500 hover:text-gray-600 transition-colors"
+                      onClick={() => {
+                        if (!editMode)
+                          toggleActivity(activity.name, MY_ACTIVITIES_KEY, MY_COLOR);
+                      }}
+                      className={`px-3 py-1.5 rounded-full text-sm border font-medium transition-all border-dashed ${
+                        editMode
+                          ? `${MY_COLOR} opacity-75 cursor-default pr-6`
+                          : sel
+                          ? "bg-blue-600 text-white border-blue-600 shadow-sm"
+                          : `${MY_COLOR} hover:opacity-80`
+                      }`}
                     >
-                      + Add
+                      {activity.name}
+                      {!editMode && sel && <span className="ml-1 text-xs">✓</span>}
                     </button>
-                  )
+                    {editMode && (
+                      <button
+                        onClick={() => trashActivity(MY_ACTIVITIES_KEY, activity.name, MY_COLOR)}
+                        title="Remove"
+                        className="absolute -top-1 -right-1 w-4 h-4 flex items-center justify-center rounded-full bg-white border border-gray-300 text-gray-400 hover:bg-red-50 hover:border-red-300 hover:text-red-500 text-xs leading-none shadow-sm transition-colors"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+
+              {showMyAdd && (
+                <div className="flex items-center gap-1">
+                  <input
+                    autoFocus
+                    value={myNewName}
+                    onChange={(e) => setMyNewName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") addMyActivity();
+                      if (e.key === "Escape") { setShowMyAdd(false); setMyNewName(""); }
+                    }}
+                    placeholder="What do you want to do?"
+                    className="border border-yellow-300 rounded-full px-3 py-1 text-sm w-48 focus:outline-none focus:border-yellow-500 bg-white"
+                  />
+                  <button onClick={addMyActivity} className="text-green-600 hover:text-green-800 text-sm font-bold">✓</button>
+                  <button onClick={() => { setShowMyAdd(false); setMyNewName(""); }} className="text-gray-400 hover:text-gray-600 text-sm">✕</button>
+                </div>
+              )}
+
+              {myActivities.length === 0 && !showMyAdd && (
+                <p className="text-yellow-500 text-xs italic">Add your own activities here — they&apos;re saved for next time.</p>
+              )}
+            </div>
+          </div>
+
+          {/* Base categories with subcategory labels */}
+          {displayedCategories.map((cat) => {
+            const groups = groupBySub(cat.activities);
+            const hasSubs = groups.size > 1 || (groups.size === 1 && !groups.has(""));
+
+            return (
+              <div key={cat.name} className="mb-6">
+                <h2 className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">
+                  {cat.name}
+                </h2>
+
+                {hasSubs ? (
+                  <div className="space-y-3">
+                    {Array.from(groups.entries()).map(([sub, acts]) => (
+                      <div key={sub}>
+                        {sub && (
+                          <p className="text-xs text-gray-400 font-medium mb-1.5 ml-0.5">
+                            {sub}
+                          </p>
+                        )}
+                        <div className="flex flex-wrap gap-2">
+                          {renderChips(acts, cat.name, cat.color, true)}
+                          {editMode && sub === "" && addingTo === cat.name && (
+                            <div className="flex items-center gap-1">
+                              <input autoFocus value={newActivityName} onChange={(e) => setNewActivityName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addActivity(cat.name); if (e.key === "Escape") cancelAdding(); }} placeholder="Activity name…" className="border border-gray-300 rounded-full px-3 py-1 text-sm w-40 focus:outline-none focus:border-blue-400" />
+                              <button onClick={() => addActivity(cat.name)} className="text-green-600 hover:text-green-800 text-sm font-bold">✓</button>
+                              <button onClick={cancelAdding} className="text-gray-400 hover:text-gray-600 text-sm">✕</button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                    {editMode && (
+                      addingTo === cat.name ? (
+                        <div className="flex items-center gap-1 mt-1">
+                          <input autoFocus value={newActivityName} onChange={(e) => setNewActivityName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addActivity(cat.name); if (e.key === "Escape") cancelAdding(); }} placeholder="Activity name…" className="border border-gray-300 rounded-full px-3 py-1 text-sm w-40 focus:outline-none focus:border-blue-400" />
+                          <button onClick={() => addActivity(cat.name)} className="text-green-600 hover:text-green-800 text-sm font-bold">✓</button>
+                          <button onClick={cancelAdding} className="text-gray-400 hover:text-gray-600 text-sm">✕</button>
+                        </div>
+                      ) : (
+                        <button onClick={() => setAddingTo(cat.name)} className="px-3 py-1.5 rounded-full text-sm border border-dashed border-gray-300 text-gray-400 hover:border-gray-500 hover:text-gray-600 transition-colors">
+                          + Add
+                        </button>
+                      )
+                    )}
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {renderChips(cat.activities, cat.name, cat.color, true)}
+                    {editMode && (
+                      addingTo === cat.name ? (
+                        <div className="flex items-center gap-1">
+                          <input autoFocus value={newActivityName} onChange={(e) => setNewActivityName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addActivity(cat.name); if (e.key === "Escape") cancelAdding(); }} placeholder="Activity name…" className="border border-gray-300 rounded-full px-3 py-1 text-sm w-40 focus:outline-none focus:border-blue-400" />
+                          <button onClick={() => addActivity(cat.name)} className="text-green-600 hover:text-green-800 text-sm font-bold">✓</button>
+                          <button onClick={cancelAdding} className="text-gray-400 hover:text-gray-600 text-sm">✕</button>
+                        </div>
+                      ) : (
+                        <button onClick={() => setAddingTo(cat.name)} className="px-3 py-1.5 rounded-full text-sm border border-dashed border-gray-300 text-gray-400 hover:border-gray-500 hover:text-gray-600 transition-colors">
+                          + Add
+                        </button>
+                      )
+                    )}
+                  </div>
                 )}
               </div>
-            </div>
-          ))}
+            );
+          })}
 
+          {/* Trash */}
           {trashedActivities.length > 0 && (
-            <div className="mt-6 pt-4 border-t border-gray-100">
-              <button
-                onClick={() => setShowTrash((t) => !t)}
-                className="flex items-center gap-2 text-sm text-gray-400 hover:text-gray-600 font-medium"
-              >
+            <div className="mt-4 pt-4 border-t border-gray-100">
+              <button onClick={() => setShowTrash((t) => !t)} className="flex items-center gap-2 text-sm text-gray-400 hover:text-gray-600 font-medium">
                 <span>Trash</span>
-                <span className="bg-gray-100 text-gray-500 text-xs rounded-full px-1.5 py-0.5">
-                  {trashedActivities.length}
-                </span>
+                <span className="bg-gray-100 text-gray-500 text-xs rounded-full px-1.5 py-0.5">{trashedActivities.length}</span>
                 <span className="text-xs">{showTrash ? "▲" : "▼"}</span>
               </button>
               {showTrash && (
                 <div className="flex flex-wrap gap-2 mt-3">
                   {trashedActivities.map((item, i) => (
-                    <div
-                      key={`${item.categoryName}-${item.activity}-${i}`}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm border border-gray-200 bg-gray-50"
-                    >
+                    <div key={`${item.categoryName}-${item.activity}-${i}`} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm border border-gray-200 bg-gray-50">
                       <span className="text-gray-400 line-through">{item.activity}</span>
                       <span className="text-gray-300 text-xs">· {item.categoryName}</span>
-                      <button
-                        onClick={() => restoreActivity(item)}
-                        title="Restore"
-                        className="text-green-500 hover:text-green-700 font-bold text-sm ml-0.5"
-                      >
-                        ↩
-                      </button>
+                      <button onClick={() => restoreActivity(item)} title="Restore" className="text-green-500 hover:text-green-700 font-bold text-sm ml-0.5">↩</button>
                     </div>
                   ))}
                 </div>
@@ -391,71 +522,34 @@ export default function JoScheduleClient() {
               <div className="flex items-center justify-between mb-3">
                 <h2 className="font-semibold text-gray-900">Schedule</h2>
                 {selected.length > 0 && (
-                  <button onClick={clearAll} className="text-xs text-red-500 hover:text-red-700">
-                    Clear all
-                  </button>
+                  <button onClick={clearAll} className="text-xs text-red-500 hover:text-red-700">Clear all</button>
                 )}
               </div>
 
               <div className="mb-3">
                 <label className="text-xs text-gray-500 block mb-1">Start time</label>
-                <input
-                  type="time"
-                  value={startTime}
-                  onChange={(e) => setStartTime(e.target.value)}
-                  className="border border-gray-300 rounded px-2 py-1.5 text-sm w-full"
-                />
+                <input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} className="border border-gray-300 rounded px-2 py-1.5 text-sm w-full" />
               </div>
 
               {selected.length === 0 ? (
                 <p className="text-gray-400 text-sm text-center py-6">
-                  No activities selected yet.
-                  <br />
-                  Click chips on the left to add.
+                  No activities selected yet.<br />Click chips on the left to add.
                 </p>
               ) : (
                 <div className="space-y-2 mb-4">
                   {selected.map((item, i) => (
-                    <div
-                      key={item.id}
-                      className="flex items-center gap-2 bg-gray-50 rounded-lg px-2 py-1.5 border border-gray-100"
-                    >
+                    <div key={item.id} className="flex items-center gap-2 bg-gray-50 rounded-lg px-2 py-1.5 border border-gray-100">
                       <div className="flex flex-col gap-0.5">
-                        <button
-                          onClick={() => moveItem(i, -1)}
-                          disabled={i === 0}
-                          className="text-gray-400 hover:text-gray-700 disabled:opacity-20 leading-none text-xs"
-                        >
-                          ▲
-                        </button>
-                        <button
-                          onClick={() => moveItem(i, 1)}
-                          disabled={i === selected.length - 1}
-                          className="text-gray-400 hover:text-gray-700 disabled:opacity-20 leading-none text-xs"
-                        >
-                          ▼
-                        </button>
+                        <button onClick={() => moveItem(i, -1)} disabled={i === 0} className="text-gray-400 hover:text-gray-700 disabled:opacity-20 leading-none text-xs">▲</button>
+                        <button onClick={() => moveItem(i, 1)} disabled={i === selected.length - 1} className="text-gray-400 hover:text-gray-700 disabled:opacity-20 leading-none text-xs">▼</button>
                       </div>
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-medium text-gray-900 truncate">{item.activity}</p>
                         <p className="text-xs text-gray-400 truncate">{item.category}</p>
                       </div>
-                      <input
-                        type="number"
-                        min={5}
-                        max={240}
-                        step={5}
-                        value={item.duration}
-                        onChange={(e) => updateDuration(item.id, parseInt(e.target.value) || 30)}
-                        className="w-14 border border-gray-300 rounded px-1 py-0.5 text-xs text-center"
-                      />
+                      <input type="number" min={5} max={240} step={5} value={item.duration} onChange={(e) => updateDuration(item.id, parseInt(e.target.value) || 30)} className="w-14 border border-gray-300 rounded px-1 py-0.5 text-xs text-center" />
                       <span className="text-xs text-gray-400">min</span>
-                      <button
-                        onClick={() => removeItem(item.id)}
-                        className="text-gray-300 hover:text-red-500 text-xs ml-1"
-                      >
-                        ✕
-                      </button>
+                      <button onClick={() => removeItem(item.id)} className="text-gray-300 hover:text-red-500 text-xs ml-1">✕</button>
                     </div>
                   ))}
                 </div>
@@ -467,10 +561,7 @@ export default function JoScheduleClient() {
                     <span>{selected.length} activities</span>
                     <span>{selected.reduce((a, s) => a + s.duration, 0)} min total</span>
                   </div>
-                  <button
-                    onClick={() => setShowPrint(true)}
-                    className="w-full bg-blue-600 hover:bg-blue-700 text-white rounded-lg py-2 text-sm font-medium transition-colors"
-                  >
+                  <button onClick={() => setShowPrint(true)} className="w-full bg-blue-600 hover:bg-blue-700 text-white rounded-lg py-2 text-sm font-medium transition-colors">
                     Generate Schedule →
                   </button>
                 </div>
