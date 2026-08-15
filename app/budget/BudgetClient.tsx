@@ -128,17 +128,17 @@ export default function BudgetClient() {
   const [modalRationale, setModalRationale] = useState('');
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
 
-  const snapshotKey = `budget_snapshots_${activeProfile}`;
-
-  // Load snapshots whenever the active profile changes
+  // Load snapshots from API whenever the active profile changes
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(snapshotKey);
-      setSnapshots(raw ? JSON.parse(raw) : []);
-    } catch {}
+    fetch(`/api/budget/${activeProfile}`)
+      .then(r => r.json())
+      .then((data: Snapshot[] | null) => {
+        setSnapshots(Array.isArray(data) ? data : []);
+      })
+      .catch(() => { setSnapshots([]); });
     setOverrides({});
     setMode('view');
-  }, [activeProfile]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [activeProfile]);
 
   // ---------------------------------------------------------------------------
   // Helpers
@@ -231,7 +231,7 @@ export default function BudgetClient() {
   // ---------------------------------------------------------------------------
   // Snapshot actions
   // ---------------------------------------------------------------------------
-  function saveSnapshot() {
+  async function saveSnapshot() {
     if (!modalTitle.trim()) return;
     const snap: Snapshot = {
       title: modalTitle.trim(),
@@ -241,10 +241,15 @@ export default function BudgetClient() {
     };
     const next = [snap, ...snapshots];
     setSnapshots(next);
-    localStorage.setItem(snapshotKey, JSON.stringify(next));
     setShowModal(false);
     setModalTitle('');
     setModalRationale('');
+    // Save to API
+    await fetch(`/api/budget/${activeProfile}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(next),
+    }).catch(() => {});
   }
 
   function restoreSnapshot(snap: Snapshot) {
@@ -252,10 +257,14 @@ export default function BudgetClient() {
     setMode('edit');
   }
 
-  function deleteSnapshot(idx: number) {
+  async function deleteSnapshot(idx: number) {
     const next = snapshots.filter((_, i) => i !== idx);
     setSnapshots(next);
-    localStorage.setItem(snapshotKey, JSON.stringify(next));
+    await fetch(`/api/budget/${activeProfile}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(next),
+    }).catch(() => {});
   }
 
   function resetToDefaults() {

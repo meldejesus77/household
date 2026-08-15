@@ -70,20 +70,36 @@ export default function JoScheduleClient() {
   const [showMyAdd, setShowMyAdd] = useState(false);
 
   const skipSave = useRef(true);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Load from API on mount
   useEffect(() => {
-    try {
-      const custom = localStorage.getItem("jo-custom-activities");
-      const trashed = localStorage.getItem("jo-trashed-activities");
-      if (custom) setCustomActivities(JSON.parse(custom));
-      if (trashed) setTrashedActivities(JSON.parse(trashed));
-    } catch {}
+    fetch('/api/jo-schedule')
+      .then(r => r.json())
+      .then((data: { customActivities?: CustomActivity[]; trashedActivities?: TrashedActivity[] } | null) => {
+        if (data) {
+          if (data.customActivities) setCustomActivities(data.customActivities);
+          if (data.trashedActivities) setTrashedActivities(data.trashedActivities);
+        }
+      })
+      .catch(() => {})
+      .finally(() => { skipSave.current = false; });
   }, []);
 
+  // Save to API on change (debounced 500ms), skip first render
   useEffect(() => {
-    if (skipSave.current) { skipSave.current = false; return; }
-    localStorage.setItem("jo-custom-activities", JSON.stringify(customActivities));
-    localStorage.setItem("jo-trashed-activities", JSON.stringify(trashedActivities));
+    if (skipSave.current) return;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      fetch('/api/jo-schedule', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ customActivities, trashedActivities }),
+      }).catch(() => {});
+    }, 500);
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
   }, [customActivities, trashedActivities]);
 
   const trashedSet = useMemo(

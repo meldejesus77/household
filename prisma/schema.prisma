@@ -1,0 +1,53 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ── Todo ──────────────────────────────────────────────────────────────────────
+model Todo {
+  id        String      @id @default(cuid())
+  text      String
+  tag       String
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+  subItems  TodoSubItem[]
+}
+
+model TodoSubItem {
+  id      String  @id @default(cuid())
+  todoId  String
+  text    String
+  checked Boolean @default(false)
+  todo    Todo    @relation(fields: [todoId], references: [id], onDelete: Cascade)
+}
+
+// ── Lists ─────────────────────────────────────────────────────────────────────
+// Single-row JSONB store — id is always 'family'
+model ListsState {
+  id    String @id @default("family")
+  data  Json
+}
+
+// ── Packing ───────────────────────────────────────────────────────────────────
+// Single-row JSONB store — stores the full localStorage key-value map
+model PackingState {
+  id   String @id @default("family")
+  data Json
+}
+
+// ── Jo Schedule ───────────────────────────────────────────────────────────────
+model JoScheduleState {
+  id   String @id @default("family")
+  data Json
+}
+
+// ── Budget Snapshots ──────────────────────────────────────────────────────────
+// One row per profile name
+model BudgetSnapshot {
+  id   String @id
+  data Json
+}

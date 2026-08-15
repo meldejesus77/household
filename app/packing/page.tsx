@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 
 const STORAGE_PREFIX = "packing_v1_";
 
@@ -417,11 +417,12 @@ function lsGet(key: string) {
 }
 
 function lsSet(key: string, val: boolean) {
+  if (typeof window === "undefined") return;
   if (val) localStorage.setItem(STORAGE_PREFIX + key, "1");
   else localStorage.removeItem(STORAGE_PREFIX + key);
 }
 
-function loadInitialStore(): Record<string, boolean> {
+function loadFromLocalStorage(): Record<string, boolean> {
   if (typeof window === "undefined") return {};
   const s: Record<string, boolean> = {};
   for (let i = 0; i < localStorage.length; i++) {
@@ -431,6 +432,21 @@ function loadInitialStore(): Record<string, boolean> {
     }
   }
   return s;
+}
+
+function applyStoreToLocalStorage(store: Record<string, boolean>) {
+  if (typeof window === "undefined") return;
+  // Clear existing packing keys
+  const keys: string[] = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k?.startsWith(STORAGE_PREFIX)) keys.push(k);
+  }
+  keys.forEach(k => localStorage.removeItem(k));
+  // Set new values
+  Object.entries(store).forEach(([k, v]) => {
+    if (v) localStorage.setItem(STORAGE_PREFIX + k, "1");
+  });
 }
 
 // ── PROGRESS ──────────────────────────────────────────────────────────────────
@@ -695,7 +711,46 @@ function CarZoneSection({
 
 export default function PackingPage() {
   const [currentView, setCurrentView] = useState("hub");
-  const [store, setStore] = useState<Record<string, boolean>>(loadInitialStore);
+  const [store, setStore] = useState<Record<string, boolean>>({});
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isFirstRender = useRef(true);
+
+  // On mount: load from localStorage immediately (instant), then sync from API
+  useEffect(() => {
+    // Load localStorage immediately so the UI isn't blank
+    const lsStore = loadFromLocalStorage();
+    setStore(lsStore);
+
+    // Then fetch from API and reconcile
+    fetch('/api/packing')
+      .then(r => r.json())
+      .then((data: Record<string, boolean> | null) => {
+        if (data && Object.keys(data).length > 0) {
+          setStore(data);
+          applyStoreToLocalStorage(data);
+        }
+        // If API returns null/empty, keep localStorage data
+      })
+      .catch(() => {/* keep localStorage data */});
+  }, []);
+
+  // Debounced save: write to both localStorage and API on every store change
+  const saveToApi = useCallback((nextStore: Record<string, boolean>) => {
+    fetch('/api/packing', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(nextStore),
+    }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (isFirstRender.current) { isFirstRender.current = false; return; }
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => saveToApi(store), 800);
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
+  }, [store, saveToApi]);
 
   const onSet = useCallback((key: string, val: boolean) => {
     lsSet(key, val);
@@ -709,6 +764,7 @@ export default function PackingPage() {
 
   function resetAll() {
     if (!confirm("Reset all packing progress?")) return;
+    // Clear localStorage
     const keys: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
@@ -716,6 +772,12 @@ export default function PackingPage() {
     }
     keys.forEach((k) => localStorage.removeItem(k));
     setStore({});
+    // Clear API
+    fetch('/api/packing', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    }).catch(() => {});
   }
 
   function goTo(id: string) {

@@ -28,6 +28,8 @@ interface TodoItem {
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
+const ROLLOVER_KEY = 'last_rollover_week';
+
 function getISOWeek(): string {
   const now = new Date();
   const jan4 = new Date(now.getFullYear(), 0, 4);
@@ -36,43 +38,12 @@ function getISOWeek(): string {
   return `${now.getFullYear()}-W${String(weekNum).padStart(2, '0')}`;
 }
 
-function uid(): string {
-  return Math.random().toString(36).slice(2) + Date.now().toString(36);
-}
-
 function tagMeta(value: TagValue) {
   return TAGS.find(t => t.value === value) ?? TAGS[0];
 }
 
 function truncate(text: string, max = 22): string {
   return text.length > max ? text.slice(0, max) + '…' : text;
-}
-
-const STORAGE_KEY = 'household_todos';
-const ROLLOVER_KEY = 'last_rollover_week';
-
-function loadTodos(): TodoItem[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveTodos(todos: TodoItem[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(todos));
-}
-
-function applyRollover(todos: TodoItem[]): TodoItem[] {
-  const currentWeek = getISOWeek();
-  const lastWeek = localStorage.getItem(ROLLOVER_KEY);
-  if (lastWeek && lastWeek !== currentWeek) {
-    todos = todos.map(t => t.tag === 'this-week' ? { ...t, tag: 'next-week' as TagValue } : t);
-    saveTodos(todos);
-  }
-  localStorage.setItem(ROLLOVER_KEY, currentWeek);
-  return todos;
 }
 
 // ── Styles (inline) ────────────────────────────────────────────────────────
@@ -156,6 +127,11 @@ const styles = `
     border-radius: 999px; border: none; cursor: pointer;
     appearance: none; -webkit-appearance: none; text-align: center;
     flex-shrink: 0;
+  }
+
+  /* Loading state */
+  .loading-state {
+    text-align: center; color: #aaa; font-size: 0.9rem; padding: 40px 0;
   }
 
   /* Empty state */
@@ -242,6 +218,7 @@ const styles = `
 // ── Component ──────────────────────────────────────────────────────────────
 export default function TodoClient() {
   const [todos, setTodos] = useState<TodoItem[]>([]);
+  const [loading, setLoading] = useState(true);
   const [activeFilters, setActiveFilters] = useState<TagValue[]>(['this-week']);
   const [showAddRow, setShowAddRow] = useState(false);
   const [newText, setNewText] = useState('');
@@ -250,19 +227,41 @@ export default function TodoClient() {
   const [subInput, setSubInput] = useState('');
   const addInputRef = useRef<HTMLInputElement>(null);
 
-  // Load + rollover on mount
+  // Load from API on mount + weekly rollover
   useEffect(() => {
-    let loaded = loadTodos();
-    loaded = applyRollover(loaded);
-    setTodos(loaded);
-  }, []);
+    async function loadTodos() {
+      try {
+        const res = await fetch('/api/todos');
+        let loaded: TodoItem[] = await res.json();
 
-  // Persist whenever todos change (after initial mount)
-  const isFirstRender = useRef(true);
-  useEffect(() => {
-    if (isFirstRender.current) { isFirstRender.current = false; return; }
-    saveTodos(todos);
-  }, [todos]);
+        // Weekly rollover: if 'last_rollover_week' in localStorage differs from current week,
+        // promote 'this-week' items to 'next-week' and save back via API.
+        const currentWeek = getISOWeek();
+        const lastWeek = localStorage.getItem(ROLLOVER_KEY);
+        if (lastWeek && lastWeek !== currentWeek) {
+          const rolled = loaded.filter(t => t.tag === 'this-week');
+          if (rolled.length > 0) {
+            // PATCH each rolled-over item
+            await Promise.all(
+              rolled.map(t =>
+                fetch(`/api/todos/${t.id}`, {
+                  method: 'PATCH',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ tag: 'next-week' }),
+                })
+              )
+            );
+            loaded = loaded.map(t => t.tag === 'this-week' ? { ...t, tag: 'next-week' as TagValue } : t);
+          }
+        }
+        localStorage.setItem(ROLLOVER_KEY, currentWeek);
+        setTodos(loaded);
+      } finally {
+        setLoading(false);
+      }
+    }
+    loadTodos();
+  }, []);
 
   // Focus add input when shown
   useEffect(() => {
@@ -275,58 +274,98 @@ export default function TodoClient() {
       const updated = todos.find(t => t.id === modalItem.id);
       if (updated) setModalItem(updated);
     }
-  }, [todos]);
+  }, [todos]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Mutations ────────────────────────────────────────────────────────────
-  function updateTodo(id: string, patch: Partial<TodoItem>) {
+  async function updateTodo(id: string, patch: Partial<TodoItem>) {
+    // Optimistic update
     setTodos(prev => prev.map(t => t.id === id ? { ...t, ...patch } : t));
+    await fetch(`/api/todos/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
   }
 
   function checkTodo(id: string, checked: boolean) {
     updateTodo(id, { tag: checked ? 'done' : 'this-week' });
   }
 
-  function addTodo() {
+  async function addTodo() {
     const text = newText.trim();
     if (!text) return;
-    const item: TodoItem = {
-      id: uid(), text, tag: newTag, subItems: [], createdAt: new Date().toISOString(),
-    };
-    setTodos(prev => [item, ...prev]);
     setNewText('');
     setNewTag('this-week');
     setShowAddRow(false);
+    const res = await fetch('/api/todos', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, tag: newTag, subItems: [] }),
+    });
+    const item: TodoItem = await res.json();
+    setTodos(prev => [item, ...prev]);
   }
 
-  function deleteTodo(id: string) {
+  async function deleteTodo(id: string) {
     setTodos(prev => prev.filter(t => t.id !== id));
     setModalItem(null);
+    await fetch(`/api/todos/${id}`, { method: 'DELETE' });
   }
 
-  function addSubItem(todoId: string) {
+  async function addSubItem(todoId: string) {
     const text = subInput.trim();
     if (!text) return;
-    const sub: SubItem = { id: uid(), text, checked: false };
-    setTodos(prev => prev.map(t =>
-      t.id === todoId ? { ...t, subItems: [...t.subItems, sub] } : t
-    ));
     setSubInput('');
+    // PATCH the todo with a nested create for the new sub-item
+    const patchRes = await fetch(`/api/todos/${todoId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        subItems: {
+          create: [{ text }],
+        },
+      }),
+    });
+    if (patchRes.ok) {
+      const updated: TodoItem = await patchRes.json();
+      setTodos(prev => prev.map(t => t.id === todoId ? updated : t));
+    }
   }
 
-  function toggleSubItem(todoId: string, subId: string) {
+  async function toggleSubItem(todoId: string, subId: string) {
+    // Optimistic update
     setTodos(prev => prev.map(t =>
       t.id === todoId
         ? { ...t, subItems: t.subItems.map(s => s.id === subId ? { ...s, checked: !s.checked } : s) }
         : t
     ));
+    const todo = todos.find(t => t.id === todoId);
+    const sub = todo?.subItems.find(s => s.id === subId);
+    if (!sub) return;
+    await fetch(`/api/todos/${todoId}/subitems/${subId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ checked: !sub.checked }),
+    });
   }
 
-  function deleteSubItem(todoId: string, subId: string) {
+  async function deleteSubItem(todoId: string, subId: string) {
+    // Optimistic update
     setTodos(prev => prev.map(t =>
       t.id === todoId
         ? { ...t, subItems: t.subItems.filter(s => s.id !== subId) }
         : t
     ));
+    // Delete via PATCH on the todo (Prisma nested delete)
+    await fetch(`/api/todos/${todoId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        subItems: {
+          delete: [{ id: subId }],
+        },
+      }),
+    });
   }
 
   function toggleFilter(tag: TagValue) {
@@ -394,10 +433,13 @@ export default function TodoClient() {
 
         {/* List */}
         <div className="todo-list">
-          {visible.length === 0 && (
+          {loading && (
+            <div className="loading-state">Loading…</div>
+          )}
+          {!loading && visible.length === 0 && (
             <div className="empty-state">No items for selected filter{activeFilters.length > 1 ? 's' : ''}.</div>
           )}
-          {visible.map(todo => {
+          {!loading && visible.map(todo => {
             const meta = tagMeta(todo.tag);
             const isDone = todo.tag === 'done';
             return (
