@@ -327,13 +327,17 @@ export default function ListsClient() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(nextState),
     })
-      .then(r => {
-        if (!r.ok) throw new Error('save failed');
+      .then(async r => {
+        if (!r.ok) {
+          const body = await r.json().catch(() => ({}));
+          throw new Error(body?.error ?? `HTTP ${r.status}`);
+        }
         setSaveStatus('saved');
         if (statusTimerRef.current) clearTimeout(statusTimerRef.current);
         statusTimerRef.current = setTimeout(() => setSaveStatus('idle'), 2000);
       })
-      .catch(() => {
+      .catch((e: Error) => {
+        console.error('[lists save]', e.message);
         setSaveStatus('error');
         if (statusTimerRef.current) clearTimeout(statusTimerRef.current);
         statusTimerRef.current = setTimeout(() => setSaveStatus('idle'), 4000);
