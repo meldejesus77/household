@@ -76,6 +76,13 @@ const styles = `
   .lists-header-title {
     font-size: 1rem; font-weight: 700; color: #fbcfe8; white-space: nowrap;
   }
+  .save-status {
+    margin-left: auto; font-size: 0.72rem; font-weight: 500; padding: 2px 8px;
+    border-radius: 6px; white-space: nowrap;
+  }
+  .save-status.saving { color: #f9a8d4; }
+  .save-status.saved { color: #86efac; }
+  .save-status.error { color: #fca5a5; font-weight: 700; }
 
   .lists-content {
     padding-top: 48px; max-width: 680px; margin: 0 auto; padding: 48px 1rem 3rem;
@@ -291,31 +298,46 @@ export default function ListsClient() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [newCatName, setNewCatName] = useState('');
   const [showHistory, setShowHistory] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const addInputRef = useRef<HTMLInputElement>(null);
   const newCatInputRef = useRef<HTMLInputElement>(null);
   const isFirstRender = useRef(true);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const statusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Prevents the initial DB load from overwriting changes the user made before fetch resolved
+  const userModifiedRef = useRef(false);
 
   // Load from API on mount
   useEffect(() => {
     fetch('/api/lists')
       .then(r => r.json())
       .then((data: ListsState | null) => {
-        if (data) {
+        if (data && !userModifiedRef.current) {
           setState(normalizeState(data));
         }
-        // else keep DEFAULT_STATE
       })
       .catch(() => {/* keep DEFAULT_STATE */});
   }, []);
 
   // Debounced save on every state change (after mount)
   const saveToApi = useCallback((nextState: ListsState) => {
+    setSaveStatus('saving');
     fetch('/api/lists', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(nextState),
-    }).catch(() => {});
+    })
+      .then(r => {
+        if (!r.ok) throw new Error('save failed');
+        setSaveStatus('saved');
+        if (statusTimerRef.current) clearTimeout(statusTimerRef.current);
+        statusTimerRef.current = setTimeout(() => setSaveStatus('idle'), 2000);
+      })
+      .catch(() => {
+        setSaveStatus('error');
+        if (statusTimerRef.current) clearTimeout(statusTimerRef.current);
+        statusTimerRef.current = setTimeout(() => setSaveStatus('idle'), 4000);
+      });
   }, []);
 
   useEffect(() => {
@@ -365,6 +387,14 @@ export default function ListsClient() {
     const newItem: Item = { id: uid(), text, url, checked: false, starred: false };
     // Non-starred items go at the TOP of the non-starred section
     const nextItems = [newItem, ...regularItems, ...starredItems];
+    userModifiedRef.current = true;
+    // Save immediately — don't rely solely on debounce so a quick refresh doesn't lose the item
+    const nextState: ListsState = {
+      ...state,
+      items: { ...state.items, [state.active]: nextItems },
+    };
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveToApi(nextState);
     setItemsForActive(nextItems);
     setNewText('');
     setNewUrl('');
@@ -378,6 +408,7 @@ export default function ListsClient() {
 
   // ── Item mutations ────────────────────────────────────────────────────
   function toggleCheck(id: string) {
+    userModifiedRef.current = true;
     setItemsForActive(
       activeItems.map(i => i.id === id ? { ...i, checked: !i.checked } : i)
     );
@@ -398,6 +429,7 @@ export default function ListsClient() {
   }
 
   function deleteItem(id: string) {
+    userModifiedRef.current = true;
     setItemsForActive(activeItems.filter(i => i.id !== id));
   }
 
@@ -480,6 +512,9 @@ export default function ListsClient() {
       <header className="lists-header">
         <Link href="/" className="home-link">← Home</Link>
         <span className="lists-header-title">Shopping Lists</span>
+        {saveStatus === 'saving' && <span className="save-status saving">Saving…</span>}
+        {saveStatus === 'saved' && <span className="save-status saved">Saved</span>}
+        {saveStatus === 'error' && <span className="save-status error">Save failed — check connection</span>}
       </header>
 
       {/* Content */}
