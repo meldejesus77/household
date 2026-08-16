@@ -52,3 +52,13 @@ model BudgetSnapshot {
   id   String @id
   data Json
 }
+
+// ── Health ────────────────────────────────────────────────────────────────────
+model HealthEvent {
+  id        String   @id @default(cuid())
+  person    String
+  text      String
+  type      String   // "positive" | "negative" | "neutral"
+  tag       String   @default("other")
+  createdAt DateTime @default(now())
+}

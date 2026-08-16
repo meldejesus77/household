@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
+    "marked": "^18.0.9",
     "next": "16.2.10",
     "prisma": "^6.19.3",
     "react": "19.2.4",

@@ -11,6 +11,7 @@ const links = [
   { href: "/retirement", label: "📈 Retirement" },
   { href: "/todo", label: "✅ Todo" },
   { href: "/lists", label: "📝 Lists" },
+  { href: "/health", label: "🩺 Health" },
 ];
 
 export default function HamburgerMenu() {
