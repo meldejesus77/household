@@ -65,9 +65,17 @@ export default function JoScheduleClient() {
   const [addingTo, setAddingTo] = useState<string | null>(null);
   const [newActivityName, setNewActivityName] = useState("");
   const [showTrash, setShowTrash] = useState(false);
+  const [openCategories, setOpenCategories] = useState<Set<string>>(new Set());
   // My Activities quick-add (always visible, no edit mode needed)
   const [myNewName, setMyNewName] = useState("");
   const [showMyAdd, setShowMyAdd] = useState(false);
+
+  const toggleCategory = (name: string) =>
+    setOpenCategories((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name); else next.add(name);
+      return next;
+    });
 
   const skipSave = useRef(true);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -444,63 +452,80 @@ export default function JoScheduleClient() {
           {displayedCategories.map((cat) => {
             const groups = groupBySub(cat.activities);
             const hasSubs = groups.size > 1 || (groups.size === 1 && !groups.has(""));
+            const isOpen = openCategories.has(cat.name);
+            const selectedCount = cat.activities.filter((a) => isSelected(a.name)).length;
 
             return (
-              <div key={cat.name} className="mb-6">
-                <h2 className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">
-                  {cat.name}
-                </h2>
+              <div key={cat.name} className="mb-2">
+                <button
+                  onClick={() => toggleCategory(cat.name)}
+                  className="w-full flex items-center justify-between px-3 py-2 rounded-lg hover:bg-gray-50 transition-colors group"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold uppercase tracking-wide text-gray-600">
+                      {cat.name}
+                    </span>
+                    <span className="text-xs text-gray-400">
+                      {cat.activities.length}
+                    </span>
+                    {selectedCount > 0 && (
+                      <span className={`text-xs font-medium px-1.5 py-0.5 rounded-full ${cat.color}`}>
+                        {selectedCount} added
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-gray-400 text-xs transition-transform">
+                    {isOpen ? "▲" : "▼"}
+                  </span>
+                </button>
 
-                {hasSubs ? (
-                  <div className="space-y-3">
-                    {Array.from(groups.entries()).map(([sub, acts]) => (
-                      <div key={sub}>
-                        {sub && (
-                          <p className="text-xs text-gray-400 font-medium mb-1.5 ml-0.5">
-                            {sub}
-                          </p>
+                {isOpen && (
+                  <div className="px-3 pb-3 pt-1">
+                    {hasSubs ? (
+                      <div className="space-y-3">
+                        {Array.from(groups.entries()).map(([sub, acts]) => (
+                          <div key={sub}>
+                            {sub && (
+                              <p className="text-xs text-gray-400 font-medium mb-1.5 ml-0.5">
+                                {sub}
+                              </p>
+                            )}
+                            <div className="flex flex-wrap gap-2">
+                              {renderChips(acts, cat.name, cat.color, true)}
+                            </div>
+                          </div>
+                        ))}
+                        {editMode && (
+                          addingTo === cat.name ? (
+                            <div className="flex items-center gap-1 mt-1">
+                              <input autoFocus value={newActivityName} onChange={(e) => setNewActivityName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addActivity(cat.name); if (e.key === "Escape") cancelAdding(); }} placeholder="Activity name…" className="border border-gray-300 rounded-full px-3 py-1 text-sm w-40 focus:outline-none focus:border-blue-400" />
+                              <button onClick={() => addActivity(cat.name)} className="text-green-600 hover:text-green-800 text-sm font-bold">✓</button>
+                              <button onClick={cancelAdding} className="text-gray-400 hover:text-gray-600 text-sm">✕</button>
+                            </div>
+                          ) : (
+                            <button onClick={() => setAddingTo(cat.name)} className="px-3 py-1.5 rounded-full text-sm border border-dashed border-gray-300 text-gray-400 hover:border-gray-500 hover:text-gray-600 transition-colors">
+                              + Add
+                            </button>
+                          )
                         )}
-                        <div className="flex flex-wrap gap-2">
-                          {renderChips(acts, cat.name, cat.color, true)}
-                          {editMode && sub === "" && addingTo === cat.name && (
+                      </div>
+                    ) : (
+                      <div className="flex flex-wrap gap-2">
+                        {renderChips(cat.activities, cat.name, cat.color, true)}
+                        {editMode && (
+                          addingTo === cat.name ? (
                             <div className="flex items-center gap-1">
                               <input autoFocus value={newActivityName} onChange={(e) => setNewActivityName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addActivity(cat.name); if (e.key === "Escape") cancelAdding(); }} placeholder="Activity name…" className="border border-gray-300 rounded-full px-3 py-1 text-sm w-40 focus:outline-none focus:border-blue-400" />
                               <button onClick={() => addActivity(cat.name)} className="text-green-600 hover:text-green-800 text-sm font-bold">✓</button>
                               <button onClick={cancelAdding} className="text-gray-400 hover:text-gray-600 text-sm">✕</button>
                             </div>
-                          )}
-                        </div>
+                          ) : (
+                            <button onClick={() => setAddingTo(cat.name)} className="px-3 py-1.5 rounded-full text-sm border border-dashed border-gray-300 text-gray-400 hover:border-gray-500 hover:text-gray-600 transition-colors">
+                              + Add
+                            </button>
+                          )
+                        )}
                       </div>
-                    ))}
-                    {editMode && (
-                      addingTo === cat.name ? (
-                        <div className="flex items-center gap-1 mt-1">
-                          <input autoFocus value={newActivityName} onChange={(e) => setNewActivityName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addActivity(cat.name); if (e.key === "Escape") cancelAdding(); }} placeholder="Activity name…" className="border border-gray-300 rounded-full px-3 py-1 text-sm w-40 focus:outline-none focus:border-blue-400" />
-                          <button onClick={() => addActivity(cat.name)} className="text-green-600 hover:text-green-800 text-sm font-bold">✓</button>
-                          <button onClick={cancelAdding} className="text-gray-400 hover:text-gray-600 text-sm">✕</button>
-                        </div>
-                      ) : (
-                        <button onClick={() => setAddingTo(cat.name)} className="px-3 py-1.5 rounded-full text-sm border border-dashed border-gray-300 text-gray-400 hover:border-gray-500 hover:text-gray-600 transition-colors">
-                          + Add
-                        </button>
-                      )
-                    )}
-                  </div>
-                ) : (
-                  <div className="flex flex-wrap gap-2">
-                    {renderChips(cat.activities, cat.name, cat.color, true)}
-                    {editMode && (
-                      addingTo === cat.name ? (
-                        <div className="flex items-center gap-1">
-                          <input autoFocus value={newActivityName} onChange={(e) => setNewActivityName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addActivity(cat.name); if (e.key === "Escape") cancelAdding(); }} placeholder="Activity name…" className="border border-gray-300 rounded-full px-3 py-1 text-sm w-40 focus:outline-none focus:border-blue-400" />
-                          <button onClick={() => addActivity(cat.name)} className="text-green-600 hover:text-green-800 text-sm font-bold">✓</button>
-                          <button onClick={cancelAdding} className="text-gray-400 hover:text-gray-600 text-sm">✕</button>
-                        </div>
-                      ) : (
-                        <button onClick={() => setAddingTo(cat.name)} className="px-3 py-1.5 rounded-full text-sm border border-dashed border-gray-300 text-gray-400 hover:border-gray-500 hover:text-gray-600 transition-colors">
-                          + Add
-                        </button>
-                      )
                     )}
                   </div>
                 )}
