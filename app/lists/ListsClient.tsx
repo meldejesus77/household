@@ -102,11 +102,18 @@ const styles = `
   .cat-tab {
     flex-shrink: 0; border: 1.5px solid #fbcfe8; border-radius: 999px;
     background: white; color: #9d174d; font-size: 0.78rem; font-weight: 600;
-    padding: 5px 14px; cursor: pointer; white-space: nowrap;
+    padding: 5px 10px 5px 14px; cursor: pointer; white-space: nowrap;
     transition: background 0.15s, color 0.15s;
+    display: flex; align-items: center; gap: 6px;
   }
   .cat-tab:hover { background: #fce7f3; }
   .cat-tab.active { background: #db2777; color: white; border-color: #db2777; }
+  .cat-tab-remove {
+    font-size: 0.72rem; opacity: 0.45; line-height: 1; padding: 1px 3px;
+    border-radius: 50%; background: none; border: none; cursor: pointer;
+    color: inherit; transition: opacity 0.15s;
+  }
+  .cat-tab-remove:hover { opacity: 1; }
   .cat-tab-add {
     flex-shrink: 0; border: 1.5px dashed #fbcfe8; border-radius: 999px;
     background: transparent; color: #ec4899; font-size: 0.85rem; font-weight: 700;
@@ -482,6 +489,20 @@ export default function ListsClient() {
 
   const categoryHistory = state.history.filter(h => h.category === state.active);
 
+  // ── Remove category ───────────────────────────────────────────────────
+  function removeCategory(cat: string) {
+    if (state.categories.length <= 1) return;
+    const hasItems = (state.items[cat] ?? []).length > 0;
+    if (hasItems && !window.confirm(`Remove "${cat}"? It has items that will be deleted.`)) return;
+    const nextCategories = state.categories.filter(c => c !== cat);
+    const nextItems = { ...state.items };
+    delete nextItems[cat];
+    const nextHistory = state.history.filter(h => h.category !== cat);
+    const nextActive = cat === state.active ? nextCategories[0] : state.active;
+    userModifiedRef.current = true;
+    setState(prev => ({ ...prev, categories: nextCategories, items: nextItems, history: nextHistory, active: nextActive }));
+  }
+
   // ── Add category ──────────────────────────────────────────────────────
   function addCategory() {
     const name = newCatName.trim();
@@ -534,6 +555,11 @@ export default function ListsClient() {
                 onClick={() => setActiveCategory(cat)}
               >
                 {cat}
+                <span
+                  className="cat-tab-remove"
+                  title={`Remove ${cat}`}
+                  onClick={e => { e.stopPropagation(); removeCategory(cat); }}
+                >✕</span>
               </button>
             ))}
             <button className="cat-tab-add" onClick={() => setShowAddModal(true)}>+</button>
