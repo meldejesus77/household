@@ -43,6 +43,13 @@ const features = [
     color: "bg-pink-50 border-pink-200 hover:bg-pink-100",
     icon: "📝",
   },
+  {
+    href: "/health",
+    title: "Health",
+    description: "Log health events for Mel, Kathy, and Jo. Track symptoms, exercise, mood, and more.",
+    color: "bg-red-50 border-red-200 hover:bg-red-100",
+    icon: "🩺",
+  },
 ];
 
 export default function HomePage() {
