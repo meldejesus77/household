@@ -88,9 +88,8 @@ npm run lint
 
 | Folder | Relationship |
 |---|---|
-| `lists77/` | Working files for a new lists-related app (documentation forthcoming from separate agent). Not the same as the in-app `/lists` route. |
 | `calendar-list.md`, `next-add/`, `todo-app-research/` | Spec / working notes for features being built into this app. Not deployed. |
 | `planning.md` | Overall architecture doc for the household dashboard. Read before making structural changes. |
 | `pending.md` | Punch list of outstanding housekeeping tasks (repo deletions, schema pushes, etc.). Check here for follow-ups. |
 
-_Previously here: `retire77/` and `packing77/` — legacy standalone apps, deleted on 2026-08-29 once the in-app `/retirement` and `/packing` routes reached feature parity. The `edgewood1/retire77` GitHub repo was also deleted; `meldejesus77/packing77` archival is pending._
+_Previously here: `retire77/` and `packing77/` — legacy standalone apps, deleted on 2026-08-29 once the in-app `/retirement` and `/packing` routes reached feature parity. Both GitHub repos (`edgewood1/retire77`, `meldejesus77/packing77`) have also been deleted._

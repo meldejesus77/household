@@ -22,6 +22,10 @@ const MONTHS = [
 
 const WEEKDAY_SHORT = ['Sun', 'Mon', 'Tues', 'Weds', 'Thurs', 'Fri', 'Sat'];
 
+const WINDOW_MONTHS = 12;
+const FUTURE_YEARS = 10;
+
+// ── date helpers ──────────────────────────────────────────────────────────────
 function uid(): string {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
@@ -40,78 +44,30 @@ function weekdayLabel(iso: string): string {
   return WEEKDAY_SHORT[parseISO(iso).getDay()];
 }
 
-function monthOf(iso: string): number {
-  return Number(iso.slice(5, 7));
+function monthOf(iso: string): number { return Number(iso.slice(5, 7)); }
+function dayOf(iso: string): number { return Number(iso.slice(8, 10)); }
+function yearOf(iso: string): number { return Number(iso.slice(0, 4)); }
+
+function pad2(n: number): string { return String(n).padStart(2, '0'); }
+
+function firstOfMonth(year: number, month: number): string {
+  return `${year}-${pad2(month)}-01`;
 }
 
-function dayOf(iso: string): number {
-  return Number(iso.slice(8, 10));
+function daysInMonth(year: number, month: number): number {
+  return new Date(year, month, 0).getDate();
 }
 
-function yearOf(iso: string): number {
-  return Number(iso.slice(0, 4));
+function lastOfMonth(year: number, month: number): string {
+  return `${year}-${pad2(month)}-${pad2(daysInMonth(year, month))}`;
 }
 
-// Compare two ISO date strings alphabetically = chronologically.
-function cmpISO(a: string, b: string): number {
-  return a < b ? -1 : a > b ? 1 : 0;
-}
-
-// True if item overlaps the given year.
-function itemInYear(item: CalendarItem, year: number): boolean {
-  const start = yearOf(item.startDate);
-  const end = item.endDate ? yearOf(item.endDate) : start;
-  return start <= year && end >= year;
-}
-
-interface Row {
-  key: string;
-  date: string;
-  month: number;
-  day: number;
-  weekday: string;
-  label: string;
-  kind: 'holiday-federal' | 'holiday-catholic' | 'item' | 'item-range';
-  itemId?: string;
-}
-
-function buildRows(items: CalendarItem[], holidays: Holiday[], year: number): Row[] {
-  const rows: Row[] = [];
-
-  for (const h of holidays) {
-    if (yearOf(h.date) !== year) continue;
-    rows.push({
-      key: `h-${h.kind}-${h.date}-${h.name}`,
-      date: h.date,
-      month: monthOf(h.date),
-      day: dayOf(h.date),
-      weekday: weekdayLabel(h.date),
-      label: h.name,
-      kind: h.kind === 'federal' ? 'holiday-federal' : 'holiday-catholic',
-    });
-  }
-
-  for (const item of items) {
-    if (!itemInYear(item, year)) continue;
-    const isRange = item.endDate && item.endDate !== item.startDate;
-    const displayDate = item.startDate;
-    const label = isRange
-      ? `${item.title} (through ${formatShort(item.endDate!)})`
-      : item.title;
-    rows.push({
-      key: `i-${item.id}`,
-      date: displayDate,
-      month: monthOf(displayDate),
-      day: dayOf(displayDate),
-      weekday: weekdayLabel(displayDate),
-      label,
-      kind: isRange ? 'item-range' : 'item',
-      itemId: item.id,
-    });
-  }
-
-  rows.sort((a, b) => cmpISO(a.date, b.date) || a.label.localeCompare(b.label));
-  return rows;
+// Add N months to a (year, month) 1-indexed pair. Returns [year, month].
+function addMonths(year: number, month: number, delta: number): [number, number] {
+  const zeroIdx = (month - 1) + delta;
+  const y = year + Math.floor(zeroIdx / 12);
+  const m = ((zeroIdx % 12) + 12) % 12 + 1;
+  return [y, m];
 }
 
 function formatShort(iso: string): string {
@@ -119,19 +75,115 @@ function formatShort(iso: string): string {
   return `${m} ${dayOf(iso)}`;
 }
 
+// ── row + window types ───────────────────────────────────────────────────────
+interface Row {
+  key: string;
+  date: string; // ISO for the row's display slot
+  day: number;
+  weekday: string;
+  label: string;
+  kind: 'holiday-federal' | 'holiday-catholic' | 'item' | 'item-range';
+  itemId?: string;
+}
+
+interface MonthSlot {
+  year: number;
+  month: number;   // 1-indexed
+  key: string;     // YYYY-MM
+  title: string;   // e.g. "August 2026"
+}
+
+function buildWindow(startYear: number, startMonth: number): MonthSlot[] {
+  const out: MonthSlot[] = [];
+  for (let i = 0; i < WINDOW_MONTHS; i++) {
+    const [y, m] = addMonths(startYear, startMonth, i);
+    out.push({
+      year: y,
+      month: m,
+      key: `${y}-${pad2(m)}`,
+      title: `${MONTHS[m - 1]} ${y}`,
+    });
+  }
+  return out;
+}
+
+function buildRowsByMonth(
+  items: CalendarItem[],
+  holidays: Holiday[],
+  window: MonthSlot[],
+): Map<string, Row[]> {
+  const map = new Map<string, Row[]>();
+  const validKeys = new Set(window.map(s => s.key));
+  for (const s of window) map.set(s.key, []);
+
+  // Holidays
+  for (const h of holidays) {
+    const key = h.date.slice(0, 7);
+    if (!validKeys.has(key)) continue;
+    map.get(key)!.push({
+      key: `h-${h.kind}-${h.date}-${h.name}`,
+      date: h.date,
+      day: dayOf(h.date),
+      weekday: weekdayLabel(h.date),
+      label: h.name,
+      kind: h.kind === 'federal' ? 'holiday-federal' : 'holiday-catholic',
+    });
+  }
+
+  // Items — one row per month it touches
+  for (const item of items) {
+    const start = item.startDate;
+    const end = item.endDate ?? item.startDate;
+    const isRange = item.endDate && item.endDate !== item.startDate;
+
+    for (const s of window) {
+      const mStart = firstOfMonth(s.year, s.month);
+      const mEnd = lastOfMonth(s.year, s.month);
+      if (start > mEnd || end < mStart) continue; // no overlap
+
+      // Row anchors on the item's start day if in this month, else the 1st.
+      const anchoredIso = (start >= mStart && start <= mEnd) ? start : mStart;
+      const label = isRange
+        ? `${item.title} (${formatShort(start)} – ${formatShort(end)})`
+        : item.title;
+
+      map.get(s.key)!.push({
+        key: `i-${item.id}-${s.key}`,
+        date: anchoredIso,
+        day: dayOf(anchoredIso),
+        weekday: weekdayLabel(anchoredIso),
+        label,
+        kind: isRange ? 'item-range' : 'item',
+        itemId: item.id,
+      });
+    }
+  }
+
+  for (const key of map.keys()) {
+    map.get(key)!.sort((a, b) => a.day - b.day || a.label.localeCompare(b.label));
+  }
+  return map;
+}
+
+// ── component ────────────────────────────────────────────────────────────────
 export default function CalendarClient() {
-  const currentYear = new Date().getFullYear();
-  const [year, setYear] = useState(currentYear);
+  const now = useMemo(() => new Date(), []);
+  const currentYear = now.getFullYear();
+  const currentMonth = now.getMonth() + 1;
+  const today = todayISO();
+
   const [items, setItems] = useState<CalendarItem[]>([]);
   const [loaded, setLoaded] = useState(false);
-  const [editMode, setEditMode] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved');
+
+  const [startYear, setStartYear] = useState(currentYear);
+  const [editMode, setEditMode] = useState(false);
   const [showFederal, setShowFederal] = useState(true);
   const [showCatholic, setShowCatholic] = useState(true);
 
   // Add-item form state
   const [newTitle, setNewTitle] = useState('');
-  const [newStart, setNewStart] = useState(todayISO());
+  const [newStart, setNewStart] = useState(today);
   const [newEnd, setNewEnd] = useState('');
   const [rangeMode, setRangeMode] = useState(false);
 
@@ -173,35 +225,68 @@ export default function CalendarClient() {
     return () => clearTimeout(t);
   }, [items, loaded]);
 
-  const holidays = useMemo(() => getHolidays(year), [year]);
-  const filteredHolidays = useMemo(
-    () => holidays.filter(h =>
-      (h.kind === 'federal' && showFederal) || (h.kind === 'catholic' && showCatholic)
-    ),
-    [holidays, showFederal, showCatholic],
+  // Earliest date we have data for — bounds how far back the year picker goes,
+  // and clamps the visible window when a past year is picked.
+  const firstDataISO = useMemo(() => {
+    if (items.length === 0) return today;
+    return items.reduce((min, it) => it.startDate < min ? it.startDate : min, items[0].startDate);
+  }, [items, today]);
+
+  const firstDataYear = yearOf(firstDataISO);
+
+  // Effective (year, month) for the first slot in the 12-month window.
+  const [effectiveStartYear, effectiveStartMonth] = useMemo<[number, number]>(() => {
+    // Raw start for the picked year
+    let rawY: number, rawM: number;
+    if (startYear === currentYear) {
+      rawY = currentYear; rawM = currentMonth;
+    } else if (startYear > currentYear) {
+      rawY = startYear; rawM = 1;
+    } else {
+      rawY = startYear; rawM = 1;
+    }
+    // Clamp to firstDataISO (never show earlier than the earliest data we have)
+    const raw = firstOfMonth(rawY, rawM);
+    const clamp = firstOfMonth(yearOf(firstDataISO), monthOf(firstDataISO));
+    if (raw < clamp) return [yearOf(clamp), monthOf(clamp)];
+    return [rawY, rawM];
+  }, [startYear, currentYear, currentMonth, firstDataISO]);
+
+  const window = useMemo(
+    () => buildWindow(effectiveStartYear, effectiveStartMonth),
+    [effectiveStartYear, effectiveStartMonth],
   );
 
-  const rows = useMemo(
-    () => buildRows(items, filteredHolidays, year),
-    [items, filteredHolidays, year],
-  );
-
-  const rowsByMonth = useMemo(() => {
-    const map = new Map<number, Row[]>();
-    for (let m = 1; m <= 12; m++) map.set(m, []);
-    for (const r of rows) map.get(r.month)!.push(r);
-    return map;
-  }, [rows]);
-
+  // Year picker: from firstDataYear (never before) up through currentYear + FUTURE_YEARS
   const yearOptions = useMemo(() => {
+    const from = Math.min(firstDataYear, currentYear);
+    const to = currentYear + FUTURE_YEARS;
     const out: number[] = [];
-    for (let y = currentYear; y <= currentYear + 10; y++) out.push(y);
+    for (let y = from; y <= to; y++) out.push(y);
     return out;
-  }, [currentYear]);
+  }, [firstDataYear, currentYear]);
 
-  const today = todayISO();
-  const minStart = year === currentYear ? today : `${year}-01-01`;
-  const maxEnd = `${year}-12-31`;
+  // Holidays for every year the window spans
+  const holidays = useMemo(() => {
+    const years = new Set(window.map(s => s.year));
+    const all: Holiday[] = [];
+    for (const y of years) all.push(...getHolidays(y));
+    return all.filter(h =>
+      (h.kind === 'federal' && showFederal) || (h.kind === 'catholic' && showCatholic)
+    );
+  }, [window, showFederal, showCatholic]);
+
+  const rowsByMonth = useMemo(
+    () => buildRowsByMonth(items, holidays, window),
+    [items, holidays, window],
+  );
+
+  // Add-form bounds:
+  //   start: today at minimum, capped at end-of-window
+  //   end: at least start date, no year cap (cross-year ranges are allowed)
+  const windowEnd = window[window.length - 1];
+  const maxStart = lastOfMonth(windowEnd.year, windowEnd.month);
+  const maxEnd = `${currentYear + FUTURE_YEARS + 1}-12-31`;
 
   const handleAdd = useCallback(() => {
     const title = newTitle.trim();
@@ -224,28 +309,29 @@ export default function CalendarClient() {
     setItems(prev => prev.filter(i => i.id !== id));
   }, []);
 
-  // Ensure form start date obeys year + future constraints when year changes
+  // Keep new-item start date in bounds
   useEffect(() => {
-    if (newStart < minStart) setNewStart(minStart);
-    if (newStart > maxEnd) setNewStart(minStart);
-  }, [year, minStart, maxEnd, newStart]);
+    if (newStart < today) setNewStart(today);
+    if (newStart > maxStart) setNewStart(today);
+  }, [today, maxStart, newStart]);
 
   return (
     <>
       <style>{styles}</style>
-      <div className="cal-header">
-        <Link href="/" className="home-link">← Home</Link>
-        <div className="cal-title">📅 Calendar</div>
-        <div className={`save-status save-${saveStatus}`}>
-          {saveStatus === 'saved' ? '✓ Saved' : saveStatus === 'saving' ? '… Saving' : '⚠ Error'}
-        </div>
-      </div>
 
-      <div className="cal-body">
+      <div className="cal-sticky">
+        <div className="cal-header">
+          <Link href="/" className="home-link">← Home</Link>
+          <div className="cal-title">📅 Calendar</div>
+          <div className={`save-status save-${saveStatus}`}>
+            {saveStatus === 'saved' ? '✓ Saved' : saveStatus === 'saving' ? '… Saving' : '⚠ Error'}
+          </div>
+        </div>
+
         <div className="cal-controls">
           <label className="control-group">
-            <span className="control-label">Year</span>
-            <select value={year} onChange={e => setYear(Number(e.target.value))}>
+            <span className="control-label">Start year</span>
+            <select value={startYear} onChange={e => setStartYear(Number(e.target.value))}>
               {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
             </select>
           </label>
@@ -288,8 +374,8 @@ export default function CalendarClient() {
             <input
               type="date"
               value={newStart}
-              min={minStart}
-              max={maxEnd}
+              min={today}
+              max={maxStart}
               onChange={e => setNewStart(e.target.value)}
             />
             <label className="chip">
@@ -313,53 +399,61 @@ export default function CalendarClient() {
             <button className="add-btn" onClick={handleAdd}>+ Add</button>
           </div>
         )}
+      </div>
 
-        {MONTHS.map((name, idx) => {
-          const monthNum = idx + 1;
-          const monthRows = rowsByMonth.get(monthNum)!;
-          if (monthRows.length === 0) return null;
+      <div className="cal-body">
+        {window.map((slot, idx) => {
+          const monthRows = rowsByMonth.get(slot.key)!;
+          const isCurrent = slot.year === currentYear && slot.month === currentMonth;
           return (
-            <section key={monthNum} className="month-section">
-              <h2 className="month-title">{name}</h2>
+            <section key={slot.key} className="month-section">
+              <h2 className={`month-title ${isCurrent ? 'is-current' : ''} ${idx === 0 ? 'is-first' : ''}`}>
+                {slot.title}
+                {isCurrent && <span className="now-tag">now</span>}
+              </h2>
               <div className="month-rule" />
-              <ul className="row-list">
-                {monthRows.map(r => (
-                  <li key={r.key} className={`row row-${r.kind}`}>
-                    <span className="row-date">{r.day} / {r.weekday}</span>
-                    <span className="row-label">
-                      {r.kind === 'holiday-federal' && <span className="tag tag-federal">Fed</span>}
-                      {r.kind === 'holiday-catholic' && <span className="tag tag-catholic">Cath</span>}
-                      {r.label}
-                    </span>
-                    {editMode && r.itemId && (
-                      <button
-                        className="delete-btn"
-                        onClick={() => handleDelete(r.itemId!)}
-                        aria-label="Delete"
-                      >
-                        ✕
-                      </button>
-                    )}
-                  </li>
-                ))}
-              </ul>
+              {monthRows.length === 0 ? (
+                <div className="month-empty">—</div>
+              ) : (
+                <ul className="row-list">
+                  {monthRows.map(r => (
+                    <li key={r.key} className={`row row-${r.kind}`}>
+                      <span className="row-date">{r.day} / {r.weekday}</span>
+                      <span className="row-label">
+                        {r.kind === 'holiday-federal' && <span className="tag tag-federal">Fed</span>}
+                        {r.kind === 'holiday-catholic' && <span className="tag tag-catholic">Cath</span>}
+                        {r.label}
+                      </span>
+                      {editMode && r.itemId && (
+                        <button
+                          className="delete-btn"
+                          onClick={() => handleDelete(r.itemId!)}
+                          aria-label="Delete"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
             </section>
           );
         })}
-
-        {rows.length === 0 && loaded && (
-          <div className="empty">
-            No events yet. {!editMode && 'Tap Edit to add one.'}
-          </div>
-        )}
       </div>
     </>
   );
 }
 
 const styles = `
-  .cal-header {
+  .cal-sticky {
     position: sticky; top: 0; z-index: 50;
+    background: #f9fafb;
+    border-bottom: 1px solid #e5e7eb;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.04);
+  }
+
+  .cal-header {
     display: flex; align-items: center; gap: 12px;
     background: #1a1a1a; color: white; padding: 12px 60px 12px 16px;
   }
@@ -377,13 +471,9 @@ const styles = `
   .save-saving { color: #fde68a; }
   .save-error { color: #fca5a5; }
 
-  .cal-body {
-    max-width: 720px; margin: 0 auto; padding: 20px 16px 80px;
-  }
-
   .cal-controls {
     display: flex; flex-wrap: wrap; align-items: center;
-    gap: 12px; margin-bottom: 20px;
+    gap: 10px; padding: 10px 16px;
   }
   .control-group { display: flex; align-items: center; gap: 6px; font-size: 0.9rem; }
   .control-label { color: #4b5563; font-weight: 500; }
@@ -405,8 +495,8 @@ const styles = `
 
   .add-form {
     display: flex; flex-wrap: wrap; gap: 8px;
-    padding: 12px; background: #eff6ff; border: 1px solid #bfdbfe;
-    border-radius: 8px; margin-bottom: 24px;
+    padding: 10px 16px 14px;
+    background: #eff6ff; border-top: 1px solid #bfdbfe;
   }
   .add-form input[type="text"], .add-form input[type="date"] {
     padding: 6px 10px; border: 1px solid #d1d5db; border-radius: 6px;
@@ -420,12 +510,30 @@ const styles = `
   }
   .add-btn:hover { background: #1e40af; }
 
+  .cal-body {
+    max-width: 720px; margin: 0 auto; padding: 20px 16px 80px;
+  }
   .month-section { margin-bottom: 28px; }
   .month-title {
     font-size: 1.25rem; font-weight: 600; color: #111827; margin-bottom: 4px;
+    display: flex; align-items: baseline; gap: 10px;
+  }
+  .month-title.is-current { color: #1e3a8a; }
+  .month-title.is-first::before {
+    content: "▸";
+    color: #6b7280; margin-right: 4px;
+    font-size: 0.9em;
+  }
+  .now-tag {
+    background: #1e3a8a; color: white; font-size: 0.62rem; font-weight: 700;
+    padding: 2px 6px; border-radius: 999px; text-transform: uppercase;
+    letter-spacing: 0.03em;
   }
   .month-rule {
     height: 1px; background: #e5e7eb; margin-bottom: 8px;
+  }
+  .month-empty {
+    padding: 8px 4px; color: #d1d5db; font-size: 0.85rem;
   }
   .row-list { list-style: none; padding: 0; margin: 0; }
   .row {
@@ -455,8 +563,4 @@ const styles = `
     cursor: pointer; font-size: 0.9rem; padding: 2px 6px;
   }
   .delete-btn:hover { color: #dc2626; }
-
-  .empty {
-    text-align: center; padding: 40px 20px; color: #9ca3af; font-size: 0.9rem;
-  }
 `;
