@@ -9,7 +9,7 @@ The **shell / dashboard app** for the family. Not a single-feature app — it's 
 
 ## Architectural rule
 
-Per `../planning.md`: **one repo, one deployment, all features live here as routes.** Do not spin up a separate repo per feature — add a route under `app/` and a tile on the dashboard instead.
+Per `../docs/planning.md`: **one repo, one deployment, all features live here as routes.** Do not spin up a separate repo per feature — add a route under `app/` and a tile on the dashboard instead.
 
 ## Features (routes)
 
@@ -88,8 +88,8 @@ npm run lint
 
 | Folder | Relationship |
 |---|---|
-| `calendar-list.md`, `next-add/`, `todo-app-research/` | Spec / working notes for features being built into this app. Not deployed. |
-| `planning.md` | Overall architecture doc for the household dashboard. Read before making structural changes. |
-| `pending.md` | Punch list of outstanding housekeeping tasks (repo deletions, schema pushes, etc.). Check here for follow-ups. |
+| `docs/planning.md` | Overall architecture doc for the household dashboard (partly historical). Read before making structural changes. |
+| `docs/pending.md` | Punch list of outstanding housekeeping tasks. Check here for follow-ups. |
+| `jo-reference/` | Reference content about Jo — activity ideas, school notes. Populate `/todo` or `/jo-schedule` from here manually. |
 
 _Previously here: `retire77/` and `packing77/` — legacy standalone apps, deleted on 2026-08-29 once the in-app `/retirement` and `/packing` routes reached feature parity. Both GitHub repos (`edgewood1/retire77`, `meldejesus77/packing77`) have also been deleted._
