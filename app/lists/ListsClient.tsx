@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import Link from 'next/link';
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -10,6 +10,7 @@ interface Item {
   url: string;
   checked: boolean;
   starred: boolean;
+  store?: string; // set for items in the FOOD category
 }
 
 interface HistoryEntry {
@@ -19,30 +20,29 @@ interface HistoryEntry {
   closedAt: string;
 }
 
+type FoodSort = 'store' | 'az';
+
 interface ListsState {
   categories: string[];
   active: string;
   items: Record<string, Item[]>;
   history: HistoryEntry[];
+  foodSort?: FoodSort;
 }
 
 // ── Constants ──────────────────────────────────────────────────────────────
-const DEFAULT_CATEGORIES = [
-  'Target',
-  'Home Depot',
-  'Whole Foods',
-  'Food Lion',
-  "Aldi's",
-  'Harris Teeter',
-  'Amazon',
-  'Big Purchases',
-];
+const FOOD = 'FOOD';
+const FOOD_STORES = ['Whole Foods', 'Food Lion', "Aldi's", 'Harris Teeter', 'Target'];
+const LEGACY_FOOD_CATEGORIES = FOOD_STORES; // same set — old per-store lists collapse into FOOD
+
+const DEFAULT_CATEGORIES = [FOOD, 'Home Depot', 'Amazon', 'Big Purchases'];
 
 const DEFAULT_STATE: ListsState = {
   categories: DEFAULT_CATEGORIES,
-  active: DEFAULT_CATEGORIES[0],
+  active: FOOD,
   items: Object.fromEntries(DEFAULT_CATEGORIES.map(c => [c, []])),
   history: [],
+  foodSort: 'store',
 };
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -50,12 +50,60 @@ function uid(): string {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
+// Migrate legacy per-store food categories into a single FOOD category
+// tagged by store. Idempotent — safe to run on already-migrated state.
 function normalizeState(parsed: ListsState): ListsState {
-  const items = { ...parsed.items };
-  for (const cat of parsed.categories) {
+  const categories = [...parsed.categories];
+  const items: Record<string, Item[]> = { ...parsed.items };
+  const history = [...(parsed.history ?? [])];
+
+  const foundLegacy = LEGACY_FOOD_CATEGORIES.filter(c => categories.includes(c));
+  if (foundLegacy.length > 0) {
+    if (!categories.includes(FOOD)) categories.unshift(FOOD);
+    if (!items[FOOD]) items[FOOD] = [];
+
+    for (const legacy of foundLegacy) {
+      const legacyItems = (items[legacy] ?? []).map(i => ({
+        ...i,
+        store: i.store ?? legacy,
+      }));
+      items[FOOD] = [...items[FOOD], ...legacyItems];
+      delete items[legacy];
+      const idx = categories.indexOf(legacy);
+      if (idx !== -1) categories.splice(idx, 1);
+      // Re-tag any history entries under the legacy category name → FOOD
+      for (let h = 0; h < history.length; h++) {
+        if (history[h].category === legacy) {
+          history[h] = {
+            ...history[h],
+            category: FOOD,
+            items: history[h].items.map(i => ({ ...i, store: i.store ?? legacy })),
+          };
+        }
+      }
+    }
+  }
+
+  if (!categories.includes(FOOD)) {
+    categories.unshift(FOOD);
+    items[FOOD] = items[FOOD] ?? [];
+  }
+
+  // Ensure every category has an items array
+  for (const cat of categories) {
     if (!items[cat]) items[cat] = [];
   }
-  return { ...parsed, items };
+
+  let active = parsed.active;
+  if (!categories.includes(active)) active = categories[0];
+
+  return {
+    categories,
+    items,
+    history,
+    active,
+    foodSort: parsed.foodSort ?? 'store',
+  };
 }
 
 // ── Styles ─────────────────────────────────────────────────────────────────
@@ -108,6 +156,7 @@ const styles = `
   }
   .cat-tab:hover { background: #fce7f3; }
   .cat-tab.active { background: #db2777; color: white; border-color: #db2777; }
+  .cat-tab.food-tab { font-weight: 800; letter-spacing: 0.04em; }
   .cat-tab-remove {
     font-size: 0.72rem; opacity: 0.45; line-height: 1; padding: 1px 3px;
     border-radius: 50%; background: none; border: none; cursor: pointer;
@@ -121,19 +170,39 @@ const styles = `
   }
   .cat-tab-add:hover { background: #fce7f3; }
 
+  /* Sort toolbar (FOOD only) */
+  .sort-bar {
+    display: flex; align-items: center; gap: 8px;
+    margin-top: 12px; padding: 6px 4px;
+    font-size: 0.78rem; color: #9d174d;
+  }
+  .sort-bar-label { font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+  .sort-btn {
+    background: white; border: 1.5px solid #fbcfe8; color: #9d174d;
+    font-size: 0.78rem; font-weight: 600; padding: 3px 10px; border-radius: 999px;
+    cursor: pointer;
+  }
+  .sort-btn.active { background: #db2777; color: white; border-color: #db2777; }
+
   /* Add-item row */
   .add-area {
     background: white; border: 1.5px solid #fbcfe8; border-radius: 12px;
     padding: 10px 12px; margin-top: 12px; margin-bottom: 4px;
   }
   .add-main-row {
-    display: flex; gap: 8px; align-items: center;
+    display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
   }
   .add-text-input {
     flex: 1; border: none; outline: none; font-size: 0.95rem;
-    background: transparent; color: #1a1a1a; min-width: 0;
+    background: transparent; color: #1a1a1a; min-width: 120px;
   }
   .add-text-input::placeholder { color: #f9a8d4; }
+  .add-store-select {
+    border: 1.5px solid #fbcfe8; border-radius: 8px;
+    background: white; color: #9d174d; font-size: 0.82rem; font-weight: 600;
+    padding: 4px 8px; cursor: pointer; outline: none;
+  }
+  .add-store-select:focus { border-color: #ec4899; }
   .url-toggle-btn {
     background: none; border: none; cursor: pointer; font-size: 1rem;
     line-height: 1; padding: 2px 4px; border-radius: 4px; opacity: 0.5;
@@ -161,6 +230,15 @@ const styles = `
   /* Item list */
   .item-list { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
 
+  .store-group-header {
+    display: flex; align-items: center; gap: 8px;
+    margin: 10px 0 2px; font-size: 0.75rem; font-weight: 700;
+    color: #be185d; text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .store-group-header::after {
+    content: ''; flex: 1; height: 1px; background: #fbcfe8;
+  }
+
   .item-row {
     display: flex; align-items: center; gap: 8px;
     background: white; border: 1.5px solid #fce7f3; border-radius: 10px;
@@ -173,6 +251,24 @@ const styles = `
     width: 18px; height: 18px; cursor: pointer; flex-shrink: 0;
     accent-color: #db2777;
   }
+
+  .store-badge {
+    flex-shrink: 0; font-size: 0.68rem; font-weight: 700;
+    color: white; background: #f472b6; padding: 2px 7px; border-radius: 999px;
+    letter-spacing: 0.02em; white-space: nowrap;
+  }
+  .store-badge.store-wholefoods { background: #16a34a; }
+  .store-badge.store-foodlion { background: #dc2626; }
+  .store-badge.store-aldis { background: #2563eb; }
+  .store-badge.store-harristeeter { background: #059669; }
+  .store-badge.store-target { background: #ef4444; }
+
+  .store-inline-select {
+    flex-shrink: 0; border: 1px solid #fbcfe8; border-radius: 999px;
+    background: white; color: #9d174d; font-size: 0.72rem; font-weight: 600;
+    padding: 2px 6px; cursor: pointer; outline: none;
+  }
+  .store-inline-select:focus { border-color: #ec4899; }
 
   .item-text {
     flex: 1; font-size: 0.92rem; color: #1a1a1a; word-break: break-word; min-width: 0;
@@ -296,11 +392,18 @@ const styles = `
   .modal-confirm-btn:hover { background: #be185d; }
 `;
 
+function storeClass(store: string): string {
+  const key = store.toLowerCase().replace(/[^a-z]/g, '');
+  const known = ['wholefoods', 'foodlion', 'aldis', 'harristeeter', 'target'];
+  return known.includes(key) ? `store-${key}` : '';
+}
+
 // ── Component ──────────────────────────────────────────────────────────────
 export default function ListsClient() {
   const [state, setState] = useState<ListsState>(DEFAULT_STATE);
   const [newText, setNewText] = useState('');
   const [newUrl, setNewUrl] = useState('');
+  const [newStore, setNewStore] = useState<string>(FOOD_STORES[0]);
   const [showUrlField, setShowUrlField] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
   const [newCatName, setNewCatName] = useState('');
@@ -367,10 +470,38 @@ export default function ListsClient() {
     }
   }, [showAddModal]);
 
-  // ── Helpers ────────────────────────────────────────────────────────────
+  // ── Derived ────────────────────────────────────────────────────────────
+  const isFood = state.active === FOOD;
   const activeItems: Item[] = state.items[state.active] ?? [];
   const regularItems = activeItems.filter(i => !i.starred);
   const starredItems = activeItems.filter(i => i.starred);
+
+  const foodSort: FoodSort = state.foodSort ?? 'store';
+
+  const sortedRegular = useMemo(
+    () => sortForDisplay(regularItems, isFood, foodSort),
+    [regularItems, isFood, foodSort]
+  );
+  const sortedStarred = useMemo(
+    () => sortForDisplay(starredItems, isFood, foodSort),
+    [starredItems, isFood, foodSort]
+  );
+
+  function sortForDisplay(items: Item[], food: boolean, mode: FoodSort): Item[] {
+    if (!food) return items;
+    if (mode === 'az') {
+      return [...items].sort((a, b) => a.text.localeCompare(b.text));
+    }
+    // By store: keep FOOD_STORES order first, then anything unknown
+    return [...items].sort((a, b) => {
+      const ai = FOOD_STORES.indexOf(a.store ?? '');
+      const bi = FOOD_STORES.indexOf(b.store ?? '');
+      const aRank = ai === -1 ? FOOD_STORES.length : ai;
+      const bRank = bi === -1 ? FOOD_STORES.length : bi;
+      if (aRank !== bRank) return aRank - bRank;
+      return a.text.localeCompare(b.text);
+    });
+  }
 
   function updateState(patch: Partial<ListsState>) {
     setState(prev => ({ ...prev, ...patch }));
@@ -395,11 +526,17 @@ export default function ListsClient() {
     const text = newText.trim();
     if (!text) return;
     const url = newUrl.trim();
-    const newItem: Item = { id: uid(), text, url, checked: false, starred: false };
+    const newItem: Item = {
+      id: uid(),
+      text,
+      url,
+      checked: false,
+      starred: false,
+      ...(isFood ? { store: newStore } : {}),
+    };
     // Non-starred items go at the TOP of the non-starred section
     const nextItems = [newItem, ...regularItems, ...starredItems];
     userModifiedRef.current = true;
-    // Save immediately — don't rely solely on debounce so a quick refresh doesn't lose the item
     const nextState: ListsState = {
       ...state,
       items: { ...state.items, [state.active]: nextItems },
@@ -431,10 +568,8 @@ export default function ListsClient() {
     const others = activeItems.filter(i => i.id !== id);
     const updated = { ...item, starred: !item.starred };
     if (updated.starred) {
-      // Move to bottom (starred section)
       setItemsForActive([...others.filter(i => !i.starred), ...others.filter(i => i.starred), updated]);
     } else {
-      // Move to top of non-starred section
       setItemsForActive([updated, ...others.filter(i => !i.starred), ...others.filter(i => i.starred)]);
     }
   }
@@ -444,10 +579,16 @@ export default function ListsClient() {
     setItemsForActive(activeItems.filter(i => i.id !== id));
   }
 
+  function setItemStore(id: string, store: string) {
+    userModifiedRef.current = true;
+    setItemsForActive(activeItems.map(i => i.id === id ? { ...i, store } : i));
+  }
+
+  // Manual reorder is only meaningful for non-food lists (where display order
+  // is insertion order). FOOD is always displayed in sorted order.
   function moveItem(id: string, direction: 'up' | 'down') {
     const item = activeItems.find(i => i.id === id);
     if (!item) return;
-    // Reorder only within the same group (regular or starred)
     const group = item.starred ? starredItems : regularItems;
     const idx = group.findIndex(i => i.id === id);
     if (direction === 'up' && idx === 0) return;
@@ -528,6 +669,98 @@ export default function ListsClient() {
     }
   }
 
+  // ── Render helpers ────────────────────────────────────────────────────
+  function renderItemRow(item: Item, idx: number, groupLen: number, allowReorder: boolean) {
+    return (
+      <div key={item.id} className={`item-row${item.checked ? ' checked-row' : ''}`}>
+        <input
+          type="checkbox"
+          className="item-checkbox"
+          checked={item.checked}
+          onChange={() => toggleCheck(item.id)}
+        />
+        {isFood && (
+          <select
+            className="store-inline-select"
+            value={item.store ?? FOOD_STORES[0]}
+            onChange={e => setItemStore(item.id, e.target.value)}
+            title="Change store"
+          >
+            {FOOD_STORES.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+        )}
+        <span className={`item-text${item.checked ? ' struck' : ''}`}>{item.text}</span>
+        {item.url && (
+          <a
+            href={item.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="item-link-btn"
+            title={item.url}
+            onClick={e => e.stopPropagation()}
+          >
+            🔗
+          </a>
+        )}
+        {allowReorder && (
+          <>
+            <button
+              className="item-reorder-btn"
+              onClick={() => moveItem(item.id, 'up')}
+              disabled={idx === 0}
+              title="Move up"
+            >
+              ▲
+            </button>
+            <button
+              className="item-reorder-btn"
+              onClick={() => moveItem(item.id, 'down')}
+              disabled={idx === groupLen - 1}
+              title="Move down"
+            >
+              ▼
+            </button>
+          </>
+        )}
+        <button
+          className={`item-star-btn${item.starred ? ' starred' : ''}`}
+          onClick={() => toggleStar(item.id)}
+          title={item.starred ? 'Unpin from Always on list' : 'Pin to Always on list'}
+        >
+          ⭐
+        </button>
+        <button
+          className="item-delete-btn"
+          onClick={() => deleteItem(item.id)}
+          title="Delete"
+        >
+          ✕
+        </button>
+      </div>
+    );
+  }
+
+  function renderFoodGrouped(items: Item[]) {
+    const groups = new Map<string, Item[]>();
+    for (const it of items) {
+      const s = it.store ?? '(no store)';
+      if (!groups.has(s)) groups.set(s, []);
+      groups.get(s)!.push(it);
+    }
+    const orderedStores = [
+      ...FOOD_STORES.filter(s => groups.has(s)),
+      ...[...groups.keys()].filter(s => !FOOD_STORES.includes(s)),
+    ];
+    return orderedStores.map(s => (
+      <div key={s}>
+        <div className="store-group-header">
+          <span className={`store-badge ${storeClass(s)}`}>{s}</span>
+        </div>
+        {groups.get(s)!.map(item => renderItemRow(item, 0, 0, false))}
+      </div>
+    ));
+  }
+
   // ── Render ────────────────────────────────────────────────────────────
   return (
     <>
@@ -551,20 +784,41 @@ export default function ListsClient() {
             {state.categories.map(cat => (
               <button
                 key={cat}
-                className={`cat-tab${state.active === cat ? ' active' : ''}`}
+                className={`cat-tab${state.active === cat ? ' active' : ''}${cat === FOOD ? ' food-tab' : ''}`}
                 onClick={() => setActiveCategory(cat)}
               >
-                {cat}
-                <span
-                  className="cat-tab-remove"
-                  title={`Remove ${cat}`}
-                  onClick={e => { e.stopPropagation(); removeCategory(cat); }}
-                >✕</span>
+                {cat === FOOD ? '🍎 FOOD' : cat}
+                {cat !== FOOD && (
+                  <span
+                    className="cat-tab-remove"
+                    title={`Remove ${cat}`}
+                    onClick={e => { e.stopPropagation(); removeCategory(cat); }}
+                  >✕</span>
+                )}
               </button>
             ))}
             <button className="cat-tab-add" onClick={() => setShowAddModal(true)}>+</button>
           </div>
         </div>
+
+        {/* Sort toolbar (FOOD only) */}
+        {isFood && (
+          <div className="sort-bar">
+            <span className="sort-bar-label">Sort:</span>
+            <button
+              className={`sort-btn${foodSort === 'store' ? ' active' : ''}`}
+              onClick={() => updateState({ foodSort: 'store' })}
+            >
+              By store
+            </button>
+            <button
+              className={`sort-btn${foodSort === 'az' ? ' active' : ''}`}
+              onClick={() => updateState({ foodSort: 'az' })}
+            >
+              A → Z
+            </button>
+          </div>
+        )}
 
         {/* Add item */}
         <div className="add-area">
@@ -572,11 +826,21 @@ export default function ListsClient() {
             <input
               ref={addInputRef}
               className="add-text-input"
-              placeholder={`Add to ${state.active}…`}
+              placeholder={isFood ? 'Add food item…' : `Add to ${state.active}…`}
               value={newText}
               onChange={e => setNewText(e.target.value)}
               onKeyDown={handleAddKeyDown}
             />
+            {isFood && (
+              <select
+                className="add-store-select"
+                value={newStore}
+                onChange={e => setNewStore(e.target.value)}
+                title="Store"
+              >
+                {FOOD_STORES.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            )}
             <button
               className={`url-toggle-btn${showUrlField ? ' active' : ''}`}
               onClick={() => setShowUrlField(v => !v)}
@@ -603,122 +867,26 @@ export default function ListsClient() {
         {/* Item list */}
         <div className="item-list">
 
-          {/* Regular items */}
-          {regularItems.length === 0 && starredItems.length === 0 && (
+          {sortedRegular.length === 0 && sortedStarred.length === 0 && (
             <div className="empty-state">No items yet — add something above.</div>
           )}
 
-          {regularItems.map((item, idx) => (
-            <div key={item.id} className={`item-row${item.checked ? ' checked-row' : ''}`}>
-              <input
-                type="checkbox"
-                className="item-checkbox"
-                checked={item.checked}
-                onChange={() => toggleCheck(item.id)}
-              />
-              <span className={`item-text${item.checked ? ' struck' : ''}`}>{item.text}</span>
-              {item.url && (
-                <a
-                  href={item.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="item-link-btn"
-                  title={item.url}
-                  onClick={e => e.stopPropagation()}
-                >
-                  🔗
-                </a>
+          {/* Regular items */}
+          {isFood && foodSort === 'store'
+            ? renderFoodGrouped(sortedRegular)
+            : sortedRegular.map((item, idx) =>
+                renderItemRow(item, idx, sortedRegular.length, !isFood)
               )}
-              <button
-                className="item-reorder-btn"
-                onClick={() => moveItem(item.id, 'up')}
-                disabled={idx === 0}
-                title="Move up"
-              >
-                ▲
-              </button>
-              <button
-                className="item-reorder-btn"
-                onClick={() => moveItem(item.id, 'down')}
-                disabled={idx === regularItems.length - 1}
-                title="Move down"
-              >
-                ▼
-              </button>
-              <button
-                className="item-star-btn"
-                onClick={() => toggleStar(item.id)}
-                title="Pin to Always on list"
-              >
-                ⭐
-              </button>
-              <button
-                className="item-delete-btn"
-                onClick={() => deleteItem(item.id)}
-                title="Delete"
-              >
-                ✕
-              </button>
-            </div>
-          ))}
 
           {/* Starred items */}
-          {starredItems.length > 0 && (
+          {sortedStarred.length > 0 && (
             <>
               <div className="starred-divider">Always on list ⭐</div>
-              {starredItems.map((item, idx) => (
-                <div key={item.id} className={`item-row${item.checked ? ' checked-row' : ''}`}>
-                  <input
-                    type="checkbox"
-                    className="item-checkbox"
-                    checked={item.checked}
-                    onChange={() => toggleCheck(item.id)}
-                  />
-                  <span className={`item-text${item.checked ? ' struck' : ''}`}>{item.text}</span>
-                  {item.url && (
-                    <a
-                      href={item.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="item-link-btn"
-                      title={item.url}
-                      onClick={e => e.stopPropagation()}
-                    >
-                      🔗
-                    </a>
+              {isFood && foodSort === 'store'
+                ? renderFoodGrouped(sortedStarred)
+                : sortedStarred.map((item, idx) =>
+                    renderItemRow(item, idx, sortedStarred.length, !isFood)
                   )}
-                  <button
-                    className="item-reorder-btn"
-                    onClick={() => moveItem(item.id, 'up')}
-                    disabled={idx === 0}
-                    title="Move up"
-                  >
-                    ▲
-                  </button>
-                  <button
-                    className="item-reorder-btn"
-                    onClick={() => moveItem(item.id, 'down')}
-                    disabled={idx === starredItems.length - 1}
-                    title="Move down"
-                  >
-                    ▼
-                  </button>
-                  <button
-                    className={`item-star-btn starred`}
-                    onClick={() => toggleStar(item.id)}
-                    title="Unpin from Always on list"
-                  >
-                    ⭐
-                  </button>
-                  <button
-                    className="item-delete-btn"
-                    onClick={() => deleteItem(item.id)}
-                    title="Delete"
-                  >
-                    ✕
-                  </button>
-                </div>
-              ))}
             </>
           )}
         </div>
@@ -758,6 +926,9 @@ export default function ListsClient() {
                         className={`history-item-row${item.checked ? ' was-checked' : ''}`}
                       >
                         <span className="history-item-dot" />
+                        {item.store && (
+                          <span className={`store-badge ${storeClass(item.store)}`}>{item.store}</span>
+                        )}
                         {item.text}
                         {item.url && (
                           <a
