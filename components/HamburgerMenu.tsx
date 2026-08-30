@@ -10,6 +10,7 @@ const links = [
   { href: "/budget", label: "💰 Budget" },
   { href: "/retirement", label: "📈 Retirement" },
   { href: "/todo", label: "✅ Todo" },
+  { href: "/calendar", label: "📆 Calendar" },
   { href: "/lists", label: "📝 Lists" },
   { href: "/health", label: "🩺 Health" },
 ];

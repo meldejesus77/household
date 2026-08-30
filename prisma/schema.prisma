@@ -53,6 +53,12 @@ model BudgetSnapshot {
   data Json
 }
 
+// ── Calendar ──────────────────────────────────────────────────────────────────
+model CalendarState {
+  id   String @id @default("family")
+  data Json
+}
+
 // ── Health ────────────────────────────────────────────────────────────────────
 model HealthEvent {
   id        String   @id @default(cuid())

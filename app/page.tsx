@@ -37,6 +37,13 @@ const features = [
     icon: "✅",
   },
   {
+    href: "/calendar",
+    title: "Calendar",
+    description: "Year-at-a-glance list of family events and holidays. Add single dates or ranges.",
+    color: "bg-indigo-50 border-indigo-200 hover:bg-indigo-100",
+    icon: "📆",
+  },
+  {
     href: "/lists",
     title: "Lists",
     description: "Grocery lists, wishlists, and any other running lists.",
