@@ -15,13 +15,24 @@ interface MedData {
   regimen?: string;
 }
 
+interface TestData {
+  testName?: string;
+  result?: string;
+  unit?: string;
+  referenceRange?: string;
+  flag?: string; // "HIGH" | "LOW" | "CRITICAL" | "NORMAL" | freeform
+}
+
+type EventData = MedData & TestData;
+
 interface HealthEvent {
   id: string;
   person: string;
   text: string;
   type: 'positive' | 'negative' | 'neutral';
   tag: string;
-  data?: MedData | null;
+  data?: EventData | null;
+  occurredAt: string;
   createdAt: string;
 }
 
@@ -34,7 +45,7 @@ const PERSONS: { key: Person; label: string }[] = [
   { key: 'jo', label: 'Jo' },
 ];
 
-const TAGS = ['illness', 'exercise', 'mood', 'medication', 'appointment', 'other'];
+const TAGS = ['illness', 'symptoms', 'exercise', 'medication', 'test', 'appointment', 'other'];
 
 const RANGE_OPTIONS: { label: string; days: number }[] = [
   { label: '7d', days: 7 },
@@ -184,7 +195,7 @@ const styles = `
     background: #fdf2f8; color: #9d174d; border: 1px solid #fbcfe8;
   }
 
-  /* Export button */
+  /* Export + clear-all buttons */
   .export-btn {
     background: white; border: 1.5px solid #fbcfe8; color: #9d174d;
     font-size: 0.75rem; font-weight: 600; padding: 4px 12px; border-radius: 8px;
@@ -192,6 +203,36 @@ const styles = `
     transition: background 0.15s;
   }
   .export-btn:hover { background: #fce7f3; }
+  .clear-all-btn {
+    background: white; border: 1.5px solid #fecaca; color: #b91c1c;
+    font-size: 0.75rem; font-weight: 600; padding: 4px 12px; border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .clear-all-btn:hover { background: #fee2e2; }
+
+  /* Event date field on add form */
+  .event-date-input {
+    border: 1.5px solid #fbcfe8; border-radius: 8px; background: white;
+    color: #9d174d; font-size: 0.78rem; font-weight: 600;
+    padding: 4px 10px; outline: none;
+  }
+  .event-date-input:focus { border-color: #ec4899; }
+
+  /* Group headers in events list */
+  .events-day-header {
+    font-size: 0.75rem; font-weight: 700; color: #9d174d;
+    margin: 14px 0 6px 4px; text-transform: uppercase; letter-spacing: 0.03em;
+  }
+  .events-day-header:first-child { margin-top: 0; }
+
+  /* Per-row delete */
+  .event-delete-btn {
+    background: none; border: none; color: #d1d5db; cursor: pointer;
+    font-size: 0.9rem; padding: 2px 6px; border-radius: 4px;
+    transition: color 0.15s, background 0.15s;
+  }
+  .event-delete-btn:hover { color: #b91c1c; background: #fee2e2; }
 
   /* Events list */
   .events-list { display: flex; flex-direction: column; gap: 7px; }
@@ -315,17 +356,6 @@ const styles = `
 `;
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
-function formatDate(iso: string): string {
-  try {
-    return new Date(iso).toLocaleDateString('en-US', {
-      month: 'short', day: 'numeric',
-      hour: 'numeric', minute: '2-digit',
-    });
-  } catch {
-    return iso;
-  }
-}
-
 function toDateKey(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
@@ -392,6 +422,7 @@ export default function HealthClient() {
   const [newText, setNewText] = useState('');
   const [newType, setNewType] = useState<'positive' | 'negative' | 'neutral'>('positive');
   const [newTag, setNewTag] = useState('other');
+  const [newOccurredOn, setNewOccurredOn] = useState<string>(() => new Date().toISOString().slice(0, 10));
   const [saving, setSaving] = useState(false);
   const [loadingDoc, setLoadingDoc] = useState(false);
   // Medication sub-form state
@@ -402,6 +433,12 @@ export default function HealthClient() {
   const [medFromDose, setMedFromDose] = useState('');
   const [medToDose, setMedToDose] = useState('');
   const [medEffectiveDate, setMedEffectiveDate] = useState('');
+  // Test sub-form state
+  const [testName, setTestName] = useState('');
+  const [testResult, setTestResult] = useState('');
+  const [testUnit, setTestUnit] = useState('');
+  const [testRange, setTestRange] = useState('');
+  const [testFlag, setTestFlag] = useState('');
 
   // Load events
   const loadEvents = useCallback(() => {
@@ -450,27 +487,39 @@ export default function HealthClient() {
     return Array.from(set).sort();
   }, [events]);
 
-  function buildMedData(): MedData | null {
-    if (newTag !== 'medication') return null;
+  function buildEventData(): EventData | null {
     const trim = (s: string) => s.trim() || undefined;
-    const d: MedData = {};
-    if (medIsSwitch) {
-      d.fromMedication = trim(medFromName);
-      d.toMedication = trim(medToName);
-      d.fromDose = trim(medFromDose);
-      d.toDose = trim(medToDose);
-    } else {
-      d.medication = trim(medName);
-      d.fromDose = trim(medFromDose);
-      d.toDose = trim(medToDose);
+    if (newTag === 'medication') {
+      const d: MedData = {};
+      if (medIsSwitch) {
+        d.fromMedication = trim(medFromName);
+        d.toMedication = trim(medToName);
+        d.fromDose = trim(medFromDose);
+        d.toDose = trim(medToDose);
+      } else {
+        d.medication = trim(medName);
+        d.fromDose = trim(medFromDose);
+        d.toDose = trim(medToDose);
+      }
+      d.effectiveDate = trim(medEffectiveDate);
+      const hasAny = Object.values(d).some((v) => v !== undefined);
+      return hasAny ? d : null;
     }
-    d.effectiveDate = trim(medEffectiveDate);
-    // Return null if nothing meaningful was entered
-    const hasAny = Object.values(d).some((v) => v !== undefined);
-    return hasAny ? d : null;
+    if (newTag === 'test') {
+      const d: TestData = {
+        testName: trim(testName),
+        result: trim(testResult),
+        unit: trim(testUnit),
+        referenceRange: trim(testRange),
+        flag: trim(testFlag),
+      };
+      const hasAny = Object.values(d).some((v) => v !== undefined);
+      return hasAny ? d : null;
+    }
+    return null;
   }
 
-  function resetMedForm() {
+  function resetSubForms() {
     setMedIsSwitch(false);
     setMedName('');
     setMedFromName('');
@@ -478,6 +527,11 @@ export default function HealthClient() {
     setMedFromDose('');
     setMedToDose('');
     setMedEffectiveDate('');
+    setTestName('');
+    setTestResult('');
+    setTestUnit('');
+    setTestRange('');
+    setTestFlag('');
   }
 
   // Add event
@@ -485,20 +539,46 @@ export default function HealthClient() {
     const text = newText.trim();
     if (!text) return;
     setSaving(true);
-    const data = buildMedData();
+    const data = buildEventData();
+    // Parse yyyy-mm-dd as local noon to avoid TZ-boundary shifts.
+    const occurredAt = newOccurredOn
+      ? new Date(`${newOccurredOn}T12:00:00`).toISOString()
+      : undefined;
     try {
       await fetch('/api/health/events', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ person, text, type: newType, tag: newTag, data }),
+        body: JSON.stringify({ person, text, type: newType, tag: newTag, data, occurredAt }),
       });
       setNewText('');
-      resetMedForm();
+      resetSubForms();
+      // Keep the occurred date sticky in case they're logging several past events in a row.
       loadEvents();
     } catch {
       // ignore
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function deleteEvent(id: string, text: string) {
+    if (!confirm(`Delete this event?\n\n"${text}"`)) return;
+    try {
+      await fetch(`/api/health/events?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+      loadEvents();
+    } catch {
+      // ignore
+    }
+  }
+
+  async function clearAllForPerson() {
+    if (!confirm(`Delete ALL ${events.length} events shown for ${person}?\n\nThis cannot be undone.`)) return;
+    if (!confirm(`Are you sure? This will permanently delete every event for ${person}, not just those in this date range.`)) return;
+    try {
+      await fetch(`/api/health/events?person=${encodeURIComponent(person)}&all=1`, { method: 'DELETE' });
+      loadEvents();
+    } catch {
+      // ignore
     }
   }
 
@@ -519,19 +599,51 @@ export default function HealthClient() {
     URL.revokeObjectURL(url);
   }
 
-  function formatMedChip(d: MedData): string {
+  function formatEventChip(d: EventData): { icon: string; text: string } | null {
+    // Medication summary
     if (d.fromMedication || d.toMedication) {
       const from = [d.fromMedication, d.fromDose].filter(Boolean).join(' ');
       const to = [d.toMedication, d.toDose].filter(Boolean).join(' ');
-      return `${from || '?'} → ${to || '?'}`;
+      return { icon: '💊', text: `${from || '?'} → ${to || '?'}` };
     }
     if (d.medication) {
-      if (d.fromDose && d.toDose) return `${d.medication} ${d.fromDose} → ${d.toDose}`;
-      if (d.toDose) return `${d.medication} ${d.toDose}`;
-      return d.medication;
+      if (d.fromDose && d.toDose) return { icon: '💊', text: `${d.medication} ${d.fromDose} → ${d.toDose}` };
+      if (d.toDose) return { icon: '💊', text: `${d.medication} ${d.toDose}` };
+      return { icon: '💊', text: d.medication };
     }
-    return '';
+    // Test summary
+    if (d.testName || d.result) {
+      const parts: string[] = [];
+      if (d.testName) parts.push(d.testName);
+      if (d.result) parts.push(`= ${d.result}${d.unit ? ' ' + d.unit : ''}`);
+      if (d.referenceRange) parts.push(`(ref ${d.referenceRange})`);
+      if (d.flag) parts.push(`[${d.flag}]`);
+      return { icon: '🧪', text: parts.join(' ') };
+    }
+    return null;
   }
+
+  function formatOccurredDate(iso: string): string {
+    const d = new Date(iso);
+    return d.toLocaleDateString('en-US', {
+      weekday: 'short', month: 'short', day: 'numeric', year: 'numeric',
+    });
+  }
+
+  // Group events by occurred yyyy-mm-dd (events are already sorted desc by API)
+  const eventsByDay: { key: string; iso: string; items: HealthEvent[] }[] = useMemo(() => {
+    const groups = new Map<string, HealthEvent[]>();
+    for (const e of events) {
+      const key = toDateKey(new Date(e.occurredAt));
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(e);
+    }
+    return Array.from(groups.entries()).map(([key, items]) => ({
+      key,
+      iso: items[0].occurredAt,
+      items,
+    }));
+  }, [events]);
 
   // View doc
   async function viewDoc(file: string) {
@@ -553,7 +665,7 @@ export default function HealthClient() {
   const dateRange = generateDateRange(days);
   const eventsByDate: Record<string, HealthEvent[]> = {};
   for (const e of events) {
-    const key = toDateKey(new Date(e.createdAt));
+    const key = toDateKey(new Date(e.occurredAt));
     if (!eventsByDate[key]) eventsByDate[key] = [];
     eventsByDate[key].push(e);
   }
@@ -644,6 +756,13 @@ export default function HealthClient() {
                     </option>
                   ))}
                 </select>
+                <input
+                  type="date"
+                  className="event-date-input"
+                  value={newOccurredOn}
+                  onChange={e => setNewOccurredOn(e.target.value)}
+                  title="Date the event occurred"
+                />
               </div>
 
               {newTag === 'medication' && (
@@ -740,9 +859,60 @@ export default function HealthClient() {
                   </div>
                 </div>
               )}
+
+              {newTag === 'test' && (
+                <div className="med-form">
+                  <div className="med-form-row">
+                    <span className="med-label">Test</span>
+                    <input
+                      className="med-input med-name"
+                      placeholder="e.g. Free T3, Vitamin D, TSH"
+                      value={testName}
+                      onChange={e => setTestName(e.target.value)}
+                    />
+                    <span className="med-label">Result</span>
+                    <input
+                      className="med-input med-dose"
+                      placeholder="value"
+                      value={testResult}
+                      onChange={e => setTestResult(e.target.value)}
+                    />
+                    <input
+                      className="med-input med-dose"
+                      placeholder="unit"
+                      value={testUnit}
+                      onChange={e => setTestUnit(e.target.value)}
+                    />
+                  </div>
+                  <div className="med-form-row">
+                    <span className="med-label">Range</span>
+                    <input
+                      className="med-input med-name"
+                      placeholder="e.g. 2.3–4.3"
+                      value={testRange}
+                      onChange={e => setTestRange(e.target.value)}
+                    />
+                    <span className="med-label">Flag</span>
+                    <select
+                      className="med-input med-dose"
+                      value={testFlag}
+                      onChange={e => setTestFlag(e.target.value)}
+                    >
+                      <option value="">—</option>
+                      <option value="HIGH">HIGH</option>
+                      <option value="LOW">LOW</option>
+                      <option value="CRITICAL">CRITICAL</option>
+                      <option value="NORMAL">NORMAL</option>
+                    </select>
+                    <span className="med-label" style={{ opacity: 0.7 }}>
+                      Notes (context, prior value, etc.) go in the main text field.
+                    </span>
+                  </div>
+                </div>
+              )}
             </div>
 
-            {/* Range pills + export */}
+            {/* Range pills + export + clear-all */}
             <div className="range-pills">
               {RANGE_OPTIONS.map(opt => (
                 <button
@@ -761,29 +931,50 @@ export default function HealthClient() {
               >
                 Export JSON
               </button>
+              <button
+                className="clear-all-btn"
+                onClick={clearAllForPerson}
+                disabled={events.length === 0}
+                title={`Delete every event for ${person} (not just those shown)`}
+              >
+                Clear all
+              </button>
             </div>
 
-            {/* Events list */}
+            {/* Events list, grouped by occurred date */}
             <div className="events-list">
               {events.length === 0 ? (
                 <div className="empty-state">No events logged in this period.</div>
               ) : (
-                events.map(e => {
-                  const medChip = e.data ? formatMedChip(e.data) : '';
-                  return (
-                    <div key={e.id} className="event-row">
-                      <span className={`event-dot ${e.type}`} />
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div className="event-text">{e.text}</div>
-                        {medChip && <span className="event-med-chip">💊 {medChip}</span>}
-                      </div>
-                      <div className="event-meta">
-                        <span className="event-tag">{e.tag}</span>
-                        <span className="event-date">{formatDate(e.createdAt)}</span>
-                      </div>
-                    </div>
-                  );
-                })
+                eventsByDay.map(group => (
+                  <div key={group.key}>
+                    <div className="events-day-header">{formatOccurredDate(group.iso)}</div>
+                    {group.items.map(e => {
+                      const chip = e.data ? formatEventChip(e.data) : null;
+                      return (
+                        <div key={e.id} className="event-row" style={{ marginBottom: 6 }}>
+                          <span className={`event-dot ${e.type}`} />
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div className="event-text">{e.text}</div>
+                            {chip && (
+                              <span className="event-med-chip">{chip.icon} {chip.text}</span>
+                            )}
+                          </div>
+                          <div className="event-meta">
+                            <span className="event-tag">{e.tag}</span>
+                          </div>
+                          <button
+                            className="event-delete-btn"
+                            onClick={() => deleteEvent(e.id, e.text)}
+                            title="Delete event"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ))
               )}
             </div>
           </>

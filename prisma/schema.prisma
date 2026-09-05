@@ -61,15 +61,21 @@ model CalendarState {
 
 // ── Health ────────────────────────────────────────────────────────────────────
 model HealthEvent {
-  id        String   @id @default(cuid())
-  person    String
-  text      String
-  type      String   // "positive" | "negative" | "neutral"
-  tag       String   @default("other")
-  // Optional structured extras. When tag = "medication", may contain:
-  //   { medication, fromDose, toDose, effectiveDate }         (dose change)
-  //   { fromMedication, fromDose, toMedication, toDose, effectiveDate }  (switch)
-  //   { medication, regimen }                                  (ongoing regimen)
-  data      Json?
-  createdAt DateTime @default(now())
+  id         String   @id @default(cuid())
+  person     String
+  text       String
+  type       String   // "positive" | "negative" | "neutral"
+  tag        String   @default("other")
+  // Optional structured extras. Common shapes:
+  //   tag = "medication":
+  //     { medication, fromDose, toDose, effectiveDate }         (dose change)
+  //     { fromMedication, fromDose, toMedication, toDose, effectiveDate }  (switch)
+  //     { medication, regimen }                                  (ongoing regimen)
+  //   tag = "test":
+  //     { testName, result, unit, referenceRange, flag }
+  data       Json?
+  // The date the event actually occurred (user-supplied). Defaults to now
+  // for entries logged the day they happen. Separate from createdAt (audit).
+  occurredAt DateTime @default(now())
+  createdAt  DateTime @default(now())
 }
