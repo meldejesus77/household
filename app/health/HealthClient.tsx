@@ -23,7 +23,12 @@ interface TestData {
   flag?: string; // "HIGH" | "LOW" | "CRITICAL" | "NORMAL" | freeform
 }
 
-type EventData = MedData & TestData;
+interface SymptomData {
+  symptomGroup?: string;   // e.g. "high thyroid"
+  symptoms?: string[];     // e.g. ["nervousness", "anxiety", "heart palpitations"]
+}
+
+type EventData = MedData & TestData & SymptomData;
 
 interface HealthEvent {
   id: string;
@@ -46,6 +51,19 @@ const PERSONS: { key: Person; label: string }[] = [
 ];
 
 const TAGS = ['illness', 'symptoms', 'exercise', 'medication', 'test', 'appointment', 'other'];
+
+// Starter symptom presets. Selecting one fills the text field with the
+// comma-joined symptom list and stores { symptomGroup, symptoms } in event
+// data so the analysis pipeline can correlate structured symptoms with labs.
+// Extend freely — this is just an in-file config.
+const SYMPTOM_PRESETS: { label: string; symptoms: string[] }[] = [
+  { label: 'high thyroid', symptoms: ['nervousness', 'anxiety', 'heart palpitations', 'chest tension', 'insomnia', 'heat intolerance'] },
+  { label: 'low thyroid',  symptoms: ['fatigue', 'cold sensitivity', 'brain fog', 'constipation', 'weight gain'] },
+  { label: 'flu',          symptoms: ['fever', 'body aches', 'fatigue', 'cough', 'headache'] },
+  { label: 'cold',         symptoms: ['runny nose', 'sore throat', 'cough', 'congestion'] },
+  { label: 'low sodium',   symptoms: ['headache', 'nausea', 'confusion', 'muscle cramps', 'fatigue'] },
+  { label: 'anemia',       symptoms: ['fatigue', 'shortness of breath', 'dizziness', 'pale skin'] },
+];
 
 const RANGE_OPTIONS: { label: string; days: number }[] = [
   { label: '7d', days: 7 },
@@ -225,6 +243,29 @@ const styles = `
     margin: 14px 0 6px 4px; text-transform: uppercase; letter-spacing: 0.03em;
   }
   .events-day-header:first-child { margin-top: 0; }
+
+  /* Save error banner */
+  .save-error {
+    background: #fef2f2; border: 1.5px solid #fecaca; color: #991b1b;
+    border-radius: 8px; padding: 8px 12px; margin-top: 8px;
+    font-size: 0.82rem;
+  }
+
+  /* Symptom preset chips */
+  .preset-row {
+    display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+  }
+  .preset-chip {
+    border: 1.5px solid #fbcfe8; border-radius: 999px;
+    background: white; color: #9d174d; font-size: 0.75rem; font-weight: 600;
+    padding: 3px 10px; cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+  }
+  .preset-chip:hover { background: #fce7f3; }
+  .preset-chip.active { background: #db2777; color: white; border-color: #db2777; }
+  .preset-help {
+    font-size: 0.72rem; color: #6b7280; margin-top: 4px;
+  }
 
   /* Per-row delete */
   .event-delete-btn {
@@ -439,6 +480,10 @@ export default function HealthClient() {
   const [testUnit, setTestUnit] = useState('');
   const [testRange, setTestRange] = useState('');
   const [testFlag, setTestFlag] = useState('');
+  // Symptom preset state (only structured when a preset is chosen)
+  const [symptomPreset, setSymptomPreset] = useState('');
+  // Save-error banner
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   // Load events
   const loadEvents = useCallback(() => {
@@ -516,6 +561,12 @@ export default function HealthClient() {
       const hasAny = Object.values(d).some((v) => v !== undefined);
       return hasAny ? d : null;
     }
+    if (newTag === 'symptoms' && symptomPreset) {
+      const preset = SYMPTOM_PRESETS.find((p) => p.label === symptomPreset);
+      if (preset) {
+        return { symptomGroup: preset.label, symptoms: preset.symptoms };
+      }
+    }
     return null;
   }
 
@@ -532,6 +583,7 @@ export default function HealthClient() {
     setTestUnit('');
     setTestRange('');
     setTestFlag('');
+    setSymptomPreset('');
   }
 
   // Add event
@@ -539,23 +591,34 @@ export default function HealthClient() {
     const text = newText.trim();
     if (!text) return;
     setSaving(true);
+    setSaveError(null);
     const data = buildEventData();
     // Parse yyyy-mm-dd as local noon to avoid TZ-boundary shifts.
     const occurredAt = newOccurredOn
       ? new Date(`${newOccurredOn}T12:00:00`).toISOString()
       : undefined;
     try {
-      await fetch('/api/health/events', {
+      const r = await fetch('/api/health/events', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ person, text, type: newType, tag: newTag, data, occurredAt }),
       });
+      if (!r.ok) {
+        let msg = `Save failed (HTTP ${r.status}).`;
+        try {
+          const body = await r.json();
+          if (body?.error) msg += ` ${body.error}`;
+        } catch {}
+        setSaveError(msg);
+        return;  // keep form contents so nothing is lost
+      }
       setNewText('');
       resetSubForms();
       // Keep the occurred date sticky in case they're logging several past events in a row.
       loadEvents();
-    } catch {
-      // ignore
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setSaveError(`Save failed: ${msg}`);
     } finally {
       setSaving(false);
     }
@@ -619,6 +682,10 @@ export default function HealthClient() {
       if (d.referenceRange) parts.push(`(ref ${d.referenceRange})`);
       if (d.flag) parts.push(`[${d.flag}]`);
       return { icon: '🧪', text: parts.join(' ') };
+    }
+    // Symptom-group summary
+    if (d.symptomGroup) {
+      return { icon: '🩺', text: d.symptomGroup };
     }
     return null;
   }
@@ -860,6 +927,34 @@ export default function HealthClient() {
                 </div>
               )}
 
+              {newTag === 'symptoms' && (
+                <div className="med-form">
+                  <div className="preset-row">
+                    <span className="med-label">Preset</span>
+                    {SYMPTOM_PRESETS.map(p => (
+                      <button
+                        key={p.label}
+                        type="button"
+                        className={`preset-chip${symptomPreset === p.label ? ' active' : ''}`}
+                        onClick={() => {
+                          if (symptomPreset === p.label) {
+                            setSymptomPreset('');
+                          } else {
+                            setSymptomPreset(p.label);
+                            setNewText(p.symptoms.join(', '));
+                          }
+                        }}
+                      >
+                        {p.label}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="preset-help">
+                    Pick a preset to auto-fill the symptom list, or type a single symptom (e.g. &quot;bone pain&quot;) in the main text field and leave preset unselected.
+                  </p>
+                </div>
+              )}
+
               {newTag === 'test' && (
                 <div className="med-form">
                   <div className="med-form-row">
@@ -908,6 +1003,19 @@ export default function HealthClient() {
                       Notes (context, prior value, etc.) go in the main text field.
                     </span>
                   </div>
+                </div>
+              )}
+
+              {saveError && (
+                <div className="save-error">
+                  {saveError}
+                  <button
+                    type="button"
+                    onClick={() => setSaveError(null)}
+                    style={{ marginLeft: 8, background: 'none', border: 'none', color: '#991b1b', textDecoration: 'underline', cursor: 'pointer', fontSize: '0.75rem' }}
+                  >
+                    Dismiss
+                  </button>
                 </div>
               )}
             </div>
