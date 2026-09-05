@@ -1,16 +1,27 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import { marked } from 'marked';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
+interface MedData {
+  medication?: string;
+  fromMedication?: string;
+  toMedication?: string;
+  fromDose?: string;
+  toDose?: string;
+  effectiveDate?: string;
+  regimen?: string;
+}
+
 interface HealthEvent {
   id: string;
   person: string;
   text: string;
   type: 'positive' | 'negative' | 'neutral';
   tag: string;
+  data?: MedData | null;
   createdAt: string;
 }
 
@@ -138,6 +149,49 @@ const styles = `
     padding: 4px 10px; cursor: pointer; outline: none;
   }
   .tag-select:focus { border-color: #ec4899; }
+
+  /* Medication sub-form */
+  .med-form {
+    margin-top: 10px; padding: 10px 12px;
+    background: #fdf2f8; border: 1.5px dashed #fbcfe8; border-radius: 8px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .med-form-row {
+    display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+  }
+  .med-input {
+    border: 1.5px solid #fbcfe8; border-radius: 6px; background: white;
+    padding: 4px 8px; font-size: 0.82rem; color: #1a1a1a; outline: none;
+    min-width: 0;
+  }
+  .med-input:focus { border-color: #ec4899; }
+  .med-input.med-name { flex: 1; min-width: 140px; }
+  .med-input.med-dose { width: 90px; }
+  .med-input.med-date { width: 140px; }
+  .med-label {
+    font-size: 0.72rem; color: #9d174d; font-weight: 600;
+  }
+  .med-switch-toggle {
+    background: none; border: none; color: #db2777; font-size: 0.72rem;
+    font-weight: 600; cursor: pointer; padding: 2px 4px; text-decoration: underline;
+  }
+  .med-switch-toggle:hover { color: #9d174d; }
+
+  /* Medication chip on event rows */
+  .event-med-chip {
+    display: inline-block; margin-top: 4px;
+    font-size: 0.7rem; font-weight: 600; padding: 2px 8px; border-radius: 999px;
+    background: #fdf2f8; color: #9d174d; border: 1px solid #fbcfe8;
+  }
+
+  /* Export button */
+  .export-btn {
+    background: white; border: 1.5px solid #fbcfe8; color: #9d174d;
+    font-size: 0.75rem; font-weight: 600; padding: 4px 12px; border-radius: 8px;
+    cursor: pointer; margin-left: auto;
+    transition: background 0.15s;
+  }
+  .export-btn:hover { background: #fce7f3; }
 
   /* Events list */
   .events-list { display: flex; flex-direction: column; gap: 7px; }
@@ -340,6 +394,14 @@ export default function HealthClient() {
   const [newTag, setNewTag] = useState('other');
   const [saving, setSaving] = useState(false);
   const [loadingDoc, setLoadingDoc] = useState(false);
+  // Medication sub-form state
+  const [medIsSwitch, setMedIsSwitch] = useState(false);
+  const [medName, setMedName] = useState('');
+  const [medFromName, setMedFromName] = useState('');
+  const [medToName, setMedToName] = useState('');
+  const [medFromDose, setMedFromDose] = useState('');
+  const [medToDose, setMedToDose] = useState('');
+  const [medEffectiveDate, setMedEffectiveDate] = useState('');
 
   // Load events
   const loadEvents = useCallback(() => {
@@ -375,24 +437,100 @@ export default function HealthClient() {
     setDocContent(null);
   }, [person]);
 
+  // Known meds for autocomplete (from prior events' structured data)
+  const knownMeds = useMemo(() => {
+    const set = new Set<string>();
+    for (const e of events) {
+      const d = e.data;
+      if (!d) continue;
+      if (d.medication) set.add(d.medication);
+      if (d.fromMedication) set.add(d.fromMedication);
+      if (d.toMedication) set.add(d.toMedication);
+    }
+    return Array.from(set).sort();
+  }, [events]);
+
+  function buildMedData(): MedData | null {
+    if (newTag !== 'medication') return null;
+    const trim = (s: string) => s.trim() || undefined;
+    const d: MedData = {};
+    if (medIsSwitch) {
+      d.fromMedication = trim(medFromName);
+      d.toMedication = trim(medToName);
+      d.fromDose = trim(medFromDose);
+      d.toDose = trim(medToDose);
+    } else {
+      d.medication = trim(medName);
+      d.fromDose = trim(medFromDose);
+      d.toDose = trim(medToDose);
+    }
+    d.effectiveDate = trim(medEffectiveDate);
+    // Return null if nothing meaningful was entered
+    const hasAny = Object.values(d).some((v) => v !== undefined);
+    return hasAny ? d : null;
+  }
+
+  function resetMedForm() {
+    setMedIsSwitch(false);
+    setMedName('');
+    setMedFromName('');
+    setMedToName('');
+    setMedFromDose('');
+    setMedToDose('');
+    setMedEffectiveDate('');
+  }
+
   // Add event
   async function addEvent() {
     const text = newText.trim();
     if (!text) return;
     setSaving(true);
+    const data = buildMedData();
     try {
       await fetch('/api/health/events', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ person, text, type: newType, tag: newTag }),
+        body: JSON.stringify({ person, text, type: newType, tag: newTag, data }),
       });
       setNewText('');
+      resetMedForm();
       loadEvents();
     } catch {
       // ignore
     } finally {
       setSaving(false);
     }
+  }
+
+  function exportEvents() {
+    const payload = {
+      person,
+      exportedAt: new Date().toISOString(),
+      rangeDays: days,
+      events,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const dateStr = new Date().toISOString().slice(0, 10);
+    a.href = url;
+    a.download = `${dateStr}_${person}_health-events_${days}d.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function formatMedChip(d: MedData): string {
+    if (d.fromMedication || d.toMedication) {
+      const from = [d.fromMedication, d.fromDose].filter(Boolean).join(' ');
+      const to = [d.toMedication, d.toDose].filter(Boolean).join(' ');
+      return `${from || '?'} → ${to || '?'}`;
+    }
+    if (d.medication) {
+      if (d.fromDose && d.toDose) return `${d.medication} ${d.fromDose} → ${d.toDose}`;
+      if (d.toDose) return `${d.medication} ${d.toDose}`;
+      return d.medication;
+    }
+    return '';
   }
 
   // View doc
@@ -507,9 +645,104 @@ export default function HealthClient() {
                   ))}
                 </select>
               </div>
+
+              {newTag === 'medication' && (
+                <div className="med-form">
+                  <datalist id="known-meds">
+                    {knownMeds.map(m => <option key={m} value={m} />)}
+                  </datalist>
+                  {!medIsSwitch ? (
+                    <div className="med-form-row">
+                      <span className="med-label">Med</span>
+                      <input
+                        className="med-input med-name"
+                        list="known-meds"
+                        placeholder="e.g. Armour"
+                        value={medName}
+                        onChange={e => setMedName(e.target.value)}
+                      />
+                      <span className="med-label">Dose</span>
+                      <input
+                        className="med-input med-dose"
+                        placeholder="from"
+                        value={medFromDose}
+                        onChange={e => setMedFromDose(e.target.value)}
+                      />
+                      <span className="med-label">→</span>
+                      <input
+                        className="med-input med-dose"
+                        placeholder="to (or blank)"
+                        value={medToDose}
+                        onChange={e => setMedToDose(e.target.value)}
+                      />
+                      <button
+                        type="button"
+                        className="med-switch-toggle"
+                        onClick={() => setMedIsSwitch(true)}
+                      >
+                        switch meds instead
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="med-form-row">
+                        <span className="med-label">From</span>
+                        <input
+                          className="med-input med-name"
+                          list="known-meds"
+                          placeholder="e.g. Armour"
+                          value={medFromName}
+                          onChange={e => setMedFromName(e.target.value)}
+                        />
+                        <input
+                          className="med-input med-dose"
+                          placeholder="dose"
+                          value={medFromDose}
+                          onChange={e => setMedFromDose(e.target.value)}
+                        />
+                      </div>
+                      <div className="med-form-row">
+                        <span className="med-label">To</span>
+                        <input
+                          className="med-input med-name"
+                          list="known-meds"
+                          placeholder="e.g. levothyroxine"
+                          value={medToName}
+                          onChange={e => setMedToName(e.target.value)}
+                        />
+                        <input
+                          className="med-input med-dose"
+                          placeholder="dose"
+                          value={medToDose}
+                          onChange={e => setMedToDose(e.target.value)}
+                        />
+                        <button
+                          type="button"
+                          className="med-switch-toggle"
+                          onClick={() => setMedIsSwitch(false)}
+                        >
+                          same med, dose change
+                        </button>
+                      </div>
+                    </>
+                  )}
+                  <div className="med-form-row">
+                    <span className="med-label">Effective</span>
+                    <input
+                      type="date"
+                      className="med-input med-date"
+                      value={medEffectiveDate}
+                      onChange={e => setMedEffectiveDate(e.target.value)}
+                    />
+                    <span className="med-label" style={{ opacity: 0.7 }}>
+                      Freeform regimen (e.g. eye drops AM + PM) goes in the main text field.
+                    </span>
+                  </div>
+                </div>
+              )}
             </div>
 
-            {/* Range pills */}
+            {/* Range pills + export */}
             <div className="range-pills">
               {RANGE_OPTIONS.map(opt => (
                 <button
@@ -520,6 +753,14 @@ export default function HealthClient() {
                   {opt.label}
                 </button>
               ))}
+              <button
+                className="export-btn"
+                onClick={exportEvents}
+                disabled={events.length === 0}
+                title="Download events for the selected range as JSON"
+              >
+                Export JSON
+              </button>
             </div>
 
             {/* Events list */}
@@ -527,16 +768,22 @@ export default function HealthClient() {
               {events.length === 0 ? (
                 <div className="empty-state">No events logged in this period.</div>
               ) : (
-                events.map(e => (
-                  <div key={e.id} className="event-row">
-                    <span className={`event-dot ${e.type}`} />
-                    <span className="event-text">{e.text}</span>
-                    <div className="event-meta">
-                      <span className="event-tag">{e.tag}</span>
-                      <span className="event-date">{formatDate(e.createdAt)}</span>
+                events.map(e => {
+                  const medChip = e.data ? formatMedChip(e.data) : '';
+                  return (
+                    <div key={e.id} className="event-row">
+                      <span className={`event-dot ${e.type}`} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div className="event-text">{e.text}</div>
+                        {medChip && <span className="event-med-chip">💊 {medChip}</span>}
+                      </div>
+                      <div className="event-meta">
+                        <span className="event-tag">{e.tag}</span>
+                        <span className="event-date">{formatDate(e.createdAt)}</span>
+                      </div>
                     </div>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
           </>

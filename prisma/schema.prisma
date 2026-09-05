@@ -66,5 +66,10 @@ model HealthEvent {
   text      String
   type      String   // "positive" | "negative" | "neutral"
   tag       String   @default("other")
+  // Optional structured extras. When tag = "medication", may contain:
+  //   { medication, fromDose, toDose, effectiveDate }         (dose change)
+  //   { fromMedication, fromDose, toMedication, toDose, effectiveDate }  (switch)
+  //   { medication, regimen }                                  (ongoing regimen)
+  data      Json?
   createdAt DateTime @default(now())
 }

@@ -21,9 +21,9 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   try {
-    const { person, text, type, tag } = await req.json();
+    const { person, text, type, tag, data } = await req.json();
     const event = await prisma.healthEvent.create({
-      data: { person, text, type, tag },
+      data: { person, text, type, tag, data: data ?? undefined },
     });
     return NextResponse.json(event);
   } catch (e) {
