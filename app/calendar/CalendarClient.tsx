@@ -82,8 +82,9 @@ interface Row {
   day: number;
   weekday: string;
   label: string;
-  kind: 'holiday-federal' | 'holiday-catholic' | 'item' | 'item-range';
+  kind: 'holiday-federal' | 'holiday-catholic' | 'item' | 'item-range' | 'today';
   itemId?: string;
+  isToday?: boolean;
 }
 
 interface MonthSlot {
@@ -111,6 +112,7 @@ function buildRowsByMonth(
   items: CalendarItem[],
   holidays: Holiday[],
   window: MonthSlot[],
+  today: string,
 ): Map<string, Row[]> {
   const map = new Map<string, Row[]>();
   const validKeys = new Set(window.map(s => s.key));
@@ -159,8 +161,35 @@ function buildRowsByMonth(
     }
   }
 
+  // Today marker: if current month is in the window, either flag existing
+  // rows on today's date or insert a synthetic marker row.
+  const todayKey = today.slice(0, 7);
+  if (validKeys.has(todayKey)) {
+    const rows = map.get(todayKey)!;
+    const matches = rows.filter(r => r.date === today);
+    if (matches.length > 0) {
+      for (const r of matches) r.isToday = true;
+    } else {
+      rows.push({
+        key: `today-${today}`,
+        date: today,
+        day: dayOf(today),
+        weekday: weekdayLabel(today),
+        label: 'Today',
+        kind: 'today',
+        isToday: true,
+      });
+    }
+  }
+
+  // Sort: by day, then today marker before other same-day rows, then label.
   for (const key of map.keys()) {
-    map.get(key)!.sort((a, b) => a.day - b.day || a.label.localeCompare(b.label));
+    map.get(key)!.sort((a, b) => {
+      if (a.day !== b.day) return a.day - b.day;
+      if (a.kind === 'today' && b.kind !== 'today') return -1;
+      if (b.kind === 'today' && a.kind !== 'today') return 1;
+      return a.label.localeCompare(b.label);
+    });
   }
   return map;
 }
@@ -277,8 +306,8 @@ export default function CalendarClient() {
   }, [window, showFederal, showCatholic]);
 
   const rowsByMonth = useMemo(
-    () => buildRowsByMonth(items, holidays, window),
-    [items, holidays, window],
+    () => buildRowsByMonth(items, holidays, window, today),
+    [items, holidays, window, today],
   );
 
   // Add-form bounds:
@@ -417,12 +446,13 @@ export default function CalendarClient() {
               ) : (
                 <ul className="row-list">
                   {monthRows.map(r => (
-                    <li key={r.key} className={`row row-${r.kind}`}>
+                    <li key={r.key} className={`row row-${r.kind} ${r.isToday ? 'is-today' : ''}`}>
                       <span className="row-date">{r.day} / {r.weekday}</span>
                       <span className="row-label">
                         {r.kind === 'holiday-federal' && <span className="tag tag-federal">Fed</span>}
                         {r.kind === 'holiday-catholic' && <span className="tag tag-catholic">Cath</span>}
-                        {r.label}
+                        {r.kind === 'today' && <span className="tag tag-today">Today</span>}
+                        {r.kind !== 'today' && r.label}
                       </span>
                       {editMode && r.itemId && (
                         <button
@@ -558,6 +588,21 @@ const styles = `
   }
   .tag-federal { background: #ca8a04; color: white; }
   .tag-catholic { background: #7c3aed; color: white; }
+  .tag-today { background: #dc2626; color: white; }
+
+  /* Today indicator */
+  .row.is-today {
+    border-top: 2px solid #dc2626;
+    background: #fef2f2;
+    margin: 0 -4px; padding: 8px;
+    border-radius: 4px 4px 0 0;
+  }
+  .row.row-today {
+    color: #dc2626; font-weight: 600;
+    border-bottom: none;
+  }
+  .row.row-today .row-date { color: #dc2626; }
+  .row.row-today .row-label { color: #dc2626; }
   .delete-btn {
     background: transparent; border: none; color: #9ca3af;
     cursor: pointer; font-size: 0.9rem; padding: 2px 6px;
