@@ -33,11 +33,33 @@ model ListsState {
   data  Json
 }
 
-// ── Packing ───────────────────────────────────────────────────────────────────
-// Single-row JSONB store — stores the full localStorage key-value map
+// ── Packing (legacy family checklist) ─────────────────────────────────────────
 model PackingState {
   id   String @id @default("family")
   data Json
+}
+
+// ── Packing (trip-based) ──────────────────────────────────────────────────────
+// Templates are the reusable list of tabs/sections/items. Three rows:
+//   id = "shared"  → tabs shared across users (pretrip, tech, camping, food, kids, car)
+//   id = "mel"     → per-user tabs for Mel (clothing, health)
+//   id = "kathy"   → per-user tabs for Kathy (clothing, health)
+model PackingTemplate {
+  id        String   @id
+  data      Json
+  updatedAt DateTime @updatedAt
+}
+
+// One row per trip. `state` is a flat { key -> true } check-map. Keys are of
+// the form "<scope>:<itemId>" where scope is "shared" | "mel" | "kathy".
+model PackingTrip {
+  id        String   @id @default(cuid())
+  name      String
+  tripDate  DateTime
+  camping   Boolean  @default(false)
+  state     Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 // ── Jo Schedule ───────────────────────────────────────────────────────────────
