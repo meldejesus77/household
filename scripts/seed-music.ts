@@ -100,7 +100,6 @@ async function main() {
             title: parsed.title,
             genre: 'oldtime',
             key,
-            tag: 'duo',
             artist: parsed.artist,
           },
         });

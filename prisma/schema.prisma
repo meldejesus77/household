@@ -89,7 +89,6 @@ model Song {
   title     String
   genre     String        // "oldtime" | "bluegrass" | "jazz" | "blues"
   key       String?       // "C" | "A" | "G" | "D" | ...  — oldtime only for now
-  tag       String        @default("duo") // "duo" | "kathy" | "mel" | "jo"
   artist    String?
   notes     String?
   createdAt DateTime      @default(now())
