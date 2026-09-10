@@ -81,6 +81,56 @@ model CalendarState {
   data Json
 }
 
+// ── Music ─────────────────────────────────────────────────────────────────────
+// Practice tracker. Four users (kathy/mel/jo/duo — duo is a shared "user" for
+// kathy+mel duet sessions and gets its own ratings/sessions/history).
+model Song {
+  id        String        @id @default(cuid())
+  title     String
+  genre     String        // "oldtime" | "bluegrass" | "jazz" | "blues"
+  key       String?       // "C" | "A" | "G" | "D" | ...  — oldtime only for now
+  tag       String        @default("duo") // "duo" | "kathy" | "mel" | "jo"
+  artist    String?
+  notes     String?
+  createdAt DateTime      @default(now())
+  ratings   SongRating[]
+  sessions  SessionSong[]
+
+  @@unique([title, genre])
+}
+
+model SongRating {
+  id     String @id @default(cuid())
+  songId String
+  user   String // "kathy" | "mel" | "jo" | "duo"
+  rating String @default("unknown") // "unknown" | "learning" | "known"
+  song   Song   @relation(fields: [songId], references: [id], onDelete: Cascade)
+
+  @@unique([songId, user])
+}
+
+model PracticeSession {
+  id        String        @id @default(cuid())
+  user      String        // "kathy" | "mel" | "jo" | "duo"
+  startedAt DateTime      @default(now())
+  endedAt   DateTime?
+  songs     SessionSong[]
+
+  // Partial unique index (WHERE "endedAt" IS NULL) enforced in migration SQL.
+  @@index([user, endedAt])
+}
+
+model SessionSong {
+  id        String          @id @default(cuid())
+  sessionId String
+  songId    String
+  playedAt  DateTime        @default(now())
+  session   PracticeSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  song      Song            @relation(fields: [songId], references: [id])
+
+  @@unique([sessionId, songId])
+}
+
 // ── Health ────────────────────────────────────────────────────────────────────
 model HealthEvent {
   id         String   @id @default(cuid())

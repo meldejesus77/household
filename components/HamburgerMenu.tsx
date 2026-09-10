@@ -13,6 +13,7 @@ const links = [
   { href: "/calendar", label: "📆 Calendar" },
   { href: "/lists", label: "📝 Lists" },
   { href: "/health", label: "🩺 Health" },
+  { href: "/music", label: "🎵 Music" },
 ];
 
 export default function HamburgerMenu() {

@@ -57,6 +57,13 @@ const features = [
     color: "bg-red-50 border-red-200 hover:bg-red-100",
     icon: "🩺",
   },
+  {
+    href: "/music",
+    title: "Music",
+    description: "Practice tracker — pick songs, log sessions, see who's learning what.",
+    color: "bg-teal-50 border-teal-200 hover:bg-teal-100",
+    icon: "🎵",
+  },
 ];
 
 export default function HomePage() {
