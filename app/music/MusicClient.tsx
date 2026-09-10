@@ -8,6 +8,7 @@ type User = 'kathy' | 'mel' | 'jo' | 'duo';
 type Genre = 'oldtime' | 'bluegrass' | 'jazz' | 'blues';
 type Rating = 'unknown' | 'learning' | 'known';
 type ListView = 'mine' | 'all';
+type SortKey = 'default' | 'title' | 'artist' | 'key';
 
 interface SongRating {
   id: string;
@@ -67,6 +68,7 @@ const RATING_LABEL: Record<Rating, string> = {
 
 const LS_USER = 'music_current_user';
 const LS_LIST_VIEW = 'music_list_view';
+const LS_SORT = 'music_sort_key';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 function getUserRating(song: Song, user: User): Rating {
@@ -359,6 +361,8 @@ export default function MusicClient() {
   const [keyFilter, setKeyFilter] = useState<string | null>(null);
   const [listView, setListView] = useState<ListView>('mine');
   const [search, setSearch] = useState('');
+  const [sortKey, setSortKey] = useState<SortKey>('default');
+  const [libraryArtists, setLibraryArtists] = useState<string[]>([]);
 
   const [showAddForm, setShowAddForm] = useState(false);
   const [newSong, setNewSong] = useState({ title: '', key: '', artist: '' });
@@ -377,10 +381,25 @@ export default function MusicClient() {
     if (savedUser && USERS.some(u => u.value === savedUser)) setCurrentUser(savedUser);
     const savedView = localStorage.getItem(LS_LIST_VIEW) as ListView | null;
     if (savedView === 'mine' || savedView === 'all') setListView(savedView);
+    const savedSort = localStorage.getItem(LS_SORT) as SortKey | null;
+    if (savedSort && ['default', 'title', 'artist', 'key'].includes(savedSort)) {
+      setSortKey(savedSort);
+    }
   }, []);
 
   useEffect(() => { localStorage.setItem(LS_USER, currentUser); }, [currentUser]);
   useEffect(() => { localStorage.setItem(LS_LIST_VIEW, listView); }, [listView]);
+  useEffect(() => { localStorage.setItem(LS_SORT, sortKey); }, [sortKey]);
+
+  // ── Load canonical artist list (static, cached by CDN)
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch('/music/artists.json');
+        if (res.ok) setLibraryArtists(await res.json());
+      } catch { /* fall back to DB artists only */ }
+    })();
+  }, []);
 
   // ── Load songs once
   useEffect(() => {
@@ -446,13 +465,32 @@ export default function MusicClient() {
       }
       return true;
     }).sort((a, b) => {
+      if (sortKey === 'title') return a.title.localeCompare(b.title);
+      if (sortKey === 'artist') {
+        const aa = (a.artist ?? '').toLowerCase();
+        const ba = (b.artist ?? '').toLowerCase();
+        // Songs without artists sort last
+        if (!aa && ba) return 1;
+        if (aa && !ba) return -1;
+        const d = aa.localeCompare(ba);
+        return d !== 0 ? d : a.title.localeCompare(b.title);
+      }
+      if (sortKey === 'key') {
+        const ak = a.key ?? '';
+        const bk = b.key ?? '';
+        if (!ak && bk) return 1;
+        if (ak && !bk) return -1;
+        const d = ak.localeCompare(bk);
+        return d !== 0 ? d : a.title.localeCompare(b.title);
+      }
+      // default: learning/known first, then unknown; alpha within
       const ra = getUserRating(a, currentUser);
       const rb = getUserRating(b, currentUser);
       const rd = RATING_ORDER[rb] - RATING_ORDER[ra];
       if (rd !== 0) return rd;
       return a.title.localeCompare(b.title);
     });
-  }, [genreSongs, keyFilter, listView, search, currentUser]);
+  }, [genreSongs, keyFilter, listView, search, currentUser, sortKey]);
 
   const checkedSongIds = useMemo(() => {
     return new Set(session?.songs.map(s => s.songId) ?? []);
@@ -770,6 +808,24 @@ export default function MusicClient() {
               ))}
             </div>
           )}
+
+          <div className="filter-group">
+            <span className="filter-label">Sort</span>
+            {([
+              { v: 'default', label: 'Default' },
+              { v: 'title',   label: 'Title' },
+              { v: 'artist',  label: 'Artist' },
+              ...(genre === 'oldtime' ? [{ v: 'key', label: 'Key' }] : []),
+            ] as { v: SortKey; label: string }[]).map(opt => (
+              <button
+                key={opt.v}
+                className={`pill ${sortKey === opt.v ? 'active' : ''}`}
+                onClick={() => setSortKey(opt.v)}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
         </div>
 
         {!session && (
@@ -942,8 +998,11 @@ export default function MusicClient() {
         )}
 
         <datalist id="artist-suggestions">
-          {Array.from(new Set(songs.map(s => s.artist).filter(Boolean))).sort().map(a => (
-            <option key={a!} value={a!} />
+          {Array.from(new Set([
+            ...songs.map(s => s.artist).filter((a): a is string => !!a),
+            ...libraryArtists,
+          ])).sort((a, b) => a.localeCompare(b)).map(a => (
+            <option key={a} value={a} />
           ))}
         </datalist>
       </main>
