@@ -69,6 +69,14 @@ export default function JoScheduleClient() {
   // My Activities quick-add (always visible, no edit mode needed)
   const [myNewName, setMyNewName] = useState("");
   const [showMyAdd, setShowMyAdd] = useState(false);
+  const [myNewCategory, setMyNewCategory] = useState<string>(MY_ACTIVITIES_KEY);
+  // Delete-confirmation modal for chip trash
+  const [confirmTrash, setConfirmTrash] = useState<
+    { categoryName: string; activity: string; color: string } | null
+  >(null);
+  // Drag-and-drop reorder in the schedule builder
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
 
   const toggleCategory = (name: string) =>
     setOpenCategories((prev) => {
@@ -147,12 +155,28 @@ export default function JoScheduleClient() {
   const addMyActivity = () => {
     const name = myNewName.trim();
     if (!name) { setShowMyAdd(false); return; }
-    if (myActivities.some((a) => a.name === name)) { setMyNewName(""); setShowMyAdd(false); return; }
+    const targetCategory = myNewCategory || MY_ACTIVITIES_KEY;
+    // Guard against dupes within the chosen destination
+    const alreadyExists =
+      targetCategory === MY_ACTIVITIES_KEY
+        ? myActivities.some((a) => a.name === name)
+        : customActivities.some(
+            (c) => c.categoryName === targetCategory && c.activity === name
+          ) ||
+          baseCategories
+            .find((c) => c.name === targetCategory)
+            ?.activities.some((a) => a.name === name);
+    if (alreadyExists) { setMyNewName(""); setShowMyAdd(false); return; }
+    // Also restore from trash if the same (category, name) was previously trashed
+    setTrashedActivities((prev) =>
+      prev.filter((t) => !(t.categoryName === targetCategory && t.activity === name))
+    );
     setCustomActivities((prev) => [
       ...prev,
-      { categoryName: MY_ACTIVITIES_KEY, activity: name },
+      { categoryName: targetCategory, activity: name },
     ]);
     setMyNewName("");
+    setMyNewCategory(MY_ACTIVITIES_KEY);
     setShowMyAdd(false);
   };
 
@@ -192,12 +216,13 @@ export default function JoScheduleClient() {
   const removeItem = (id: string) =>
     setSelected((prev) => prev.filter((s) => s.id !== id));
 
-  const moveItem = (index: number, dir: -1 | 1) => {
+  const reorderItem = (from: number, to: number) => {
+    if (from === to) return;
     setSelected((prev) => {
+      if (from < 0 || from >= prev.length || to < 0 || to >= prev.length) return prev;
       const next = [...prev];
-      const target = index + dir;
-      if (target < 0 || target >= next.length) return prev;
-      [next[index], next[target]] = [next[target], next[index]];
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
       return next;
     });
   };
@@ -319,8 +344,8 @@ export default function JoScheduleClient() {
           </button>
           {editMode && showEditControls && (
             <button
-              onClick={() => trashActivity(categoryName, activity.name, color)}
-              title="Send to trash"
+              onClick={() => setConfirmTrash({ categoryName, activity: activity.name, color })}
+              title="Delete activity"
               className="absolute -top-1 -right-1 w-4 h-4 flex items-center justify-center rounded-full bg-white border border-gray-300 text-gray-400 hover:bg-red-50 hover:border-red-300 hover:text-red-500 text-xs leading-none shadow-sm transition-colors"
             >
               ✕
@@ -413,8 +438,8 @@ export default function JoScheduleClient() {
                     </button>
                     {editMode && (
                       <button
-                        onClick={() => trashActivity(MY_ACTIVITIES_KEY, activity.name, MY_COLOR)}
-                        title="Remove"
+                        onClick={() => setConfirmTrash({ categoryName: MY_ACTIVITIES_KEY, activity: activity.name, color: MY_COLOR })}
+                        title="Delete activity"
                         className="absolute -top-1 -right-1 w-4 h-4 flex items-center justify-center rounded-full bg-white border border-gray-300 text-gray-400 hover:bg-red-50 hover:border-red-300 hover:text-red-500 text-xs leading-none shadow-sm transition-colors"
                       >
                         ✕
@@ -425,20 +450,32 @@ export default function JoScheduleClient() {
               })}
 
               {showMyAdd && (
-                <div className="flex items-center gap-1">
+                <div className="flex items-center gap-1 flex-wrap w-full">
                   <input
                     autoFocus
                     value={myNewName}
                     onChange={(e) => setMyNewName(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key === "Enter") addMyActivity();
-                      if (e.key === "Escape") { setShowMyAdd(false); setMyNewName(""); }
+                      if (e.key === "Escape") { setShowMyAdd(false); setMyNewName(""); setMyNewCategory(MY_ACTIVITIES_KEY); }
                     }}
                     placeholder="What do you want to do?"
                     className="border border-yellow-300 rounded-full px-3 py-1 text-sm w-48 focus:outline-none focus:border-yellow-500 bg-white"
                   />
+                  <select
+                    value={myNewCategory}
+                    onChange={(e) => setMyNewCategory(e.target.value)}
+                    title="Save this activity to which category?"
+                    className="border border-yellow-300 rounded-full px-2 py-1 text-xs bg-white focus:outline-none focus:border-yellow-500"
+                  >
+                    <option value={MY_ACTIVITIES_KEY}>My Activities</option>
+                    {baseCategories.map((c) => (
+                      <option key={c.name} value={c.name}>{c.name}</option>
+                    ))}
+                  </select>
                   <button onClick={addMyActivity} className="text-green-600 hover:text-green-800 text-sm font-bold">✓</button>
-                  <button onClick={() => { setShowMyAdd(false); setMyNewName(""); }} className="text-gray-400 hover:text-gray-600 text-sm">✕</button>
+                  <button onClick={() => { setShowMyAdd(false); setMyNewName(""); setMyNewCategory(MY_ACTIVITIES_KEY); }} className="text-gray-400 hover:text-gray-600 text-sm">✕</button>
+                  <span className="text-[11px] text-yellow-700 italic w-full pl-1">Saved for next time. Pick a category to file it there.</span>
                 </div>
               )}
 
@@ -577,22 +614,74 @@ export default function JoScheduleClient() {
                   No activities selected yet.<br />Click chips on the left to add.
                 </p>
               ) : (
-                <div className="space-y-2 mb-4">
-                  {selected.map((item, i) => (
-                    <div key={item.id} className="flex items-center gap-2 bg-gray-50 rounded-lg px-2 py-1.5 border border-gray-100">
-                      <div className="flex flex-col gap-0.5">
-                        <button onClick={() => moveItem(i, -1)} disabled={i === 0} className="text-gray-400 hover:text-gray-700 disabled:opacity-20 leading-none text-xs">▲</button>
-                        <button onClick={() => moveItem(i, 1)} disabled={i === selected.length - 1} className="text-gray-400 hover:text-gray-700 disabled:opacity-20 leading-none text-xs">▼</button>
+                <div className="space-y-1.5 mb-4">
+                  {scheduleBlocks.map((item, i) => {
+                    const isDragging = dragIndex === i;
+                    const isDropTarget = dragOverIndex === i && dragIndex !== null && dragIndex !== i;
+                    return (
+                      <div
+                        key={item.id}
+                        draggable
+                        onDragStart={(e) => {
+                          setDragIndex(i);
+                          e.dataTransfer.effectAllowed = "move";
+                          // Firefox requires data to be set
+                          e.dataTransfer.setData("text/plain", String(i));
+                        }}
+                        onDragEnd={() => { setDragIndex(null); setDragOverIndex(null); }}
+                        onDragOver={(e) => {
+                          if (dragIndex === null) return;
+                          e.preventDefault();
+                          e.dataTransfer.dropEffect = "move";
+                          if (dragOverIndex !== i) setDragOverIndex(i);
+                        }}
+                        onDragLeave={() => {
+                          if (dragOverIndex === i) setDragOverIndex(null);
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          if (dragIndex !== null) reorderItem(dragIndex, i);
+                          setDragIndex(null);
+                          setDragOverIndex(null);
+                        }}
+                        className={`bg-gray-50 rounded-lg border transition-all ${
+                          isDragging ? "opacity-40" : ""
+                        } ${
+                          isDropTarget
+                            ? "border-blue-400 border-2"
+                            : "border-gray-100"
+                        }`}
+                      >
+                        {/* Time bar */}
+                        <div className="flex items-center justify-between px-2 pt-1.5 pb-0.5 text-[11px] font-mono text-gray-500">
+                          <span>{item.start} – {item.end}</span>
+                          <span className="text-gray-400">#{i + 1}</span>
+                        </div>
+                        <div className="flex items-center gap-2 px-2 pb-1.5">
+                          <span
+                            className="cursor-grab active:cursor-grabbing text-gray-400 hover:text-gray-700 select-none text-lg leading-none px-0.5"
+                            title="Drag to reorder"
+                            aria-label="Drag handle"
+                          >
+                            ⋮⋮
+                          </span>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-gray-900 truncate">{item.activity}</p>
+                            <p className="text-xs text-gray-400 truncate">{item.category}</p>
+                          </div>
+                          <input type="number" min={5} max={240} step={5} value={item.duration} onChange={(e) => updateDuration(item.id, parseInt(e.target.value) || 30)} className="w-14 border border-gray-300 rounded px-1 py-0.5 text-xs text-center" />
+                          <span className="text-xs text-gray-400">min</span>
+                          <button
+                            onClick={() => removeItem(item.id)}
+                            title="Remove from schedule"
+                            className="text-gray-300 hover:text-red-500 text-xs ml-1"
+                          >
+                            ✕
+                          </button>
+                        </div>
                       </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-gray-900 truncate">{item.activity}</p>
-                        <p className="text-xs text-gray-400 truncate">{item.category}</p>
-                      </div>
-                      <input type="number" min={5} max={240} step={5} value={item.duration} onChange={(e) => updateDuration(item.id, parseInt(e.target.value) || 30)} className="w-14 border border-gray-300 rounded px-1 py-0.5 text-xs text-center" />
-                      <span className="text-xs text-gray-400">min</span>
-                      <button onClick={() => removeItem(item.id)} className="text-gray-300 hover:text-red-500 text-xs ml-1">✕</button>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
 
@@ -611,6 +700,46 @@ export default function JoScheduleClient() {
           </div>
         </div>
       </div>
+
+      {/* Delete confirmation modal */}
+      {confirmTrash && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={() => setConfirmTrash(null)}
+          onKeyDown={(e) => { if (e.key === "Escape") setConfirmTrash(null); }}
+          role="dialog"
+          aria-modal="true"
+        >
+          <div
+            className="bg-white rounded-xl shadow-xl max-w-sm w-full p-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-base font-semibold text-gray-900 mb-1">Delete activity?</h3>
+            <p className="text-sm text-gray-600 mb-4">
+              Delete <span className="font-medium text-gray-900">&ldquo;{confirmTrash.activity}&rdquo;</span> from{" "}
+              <span className="font-medium text-gray-900">{confirmTrash.categoryName}</span>? It moves to trash and can be restored.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setConfirmTrash(null)}
+                className="px-3 py-1.5 rounded-lg border border-gray-300 text-gray-700 text-sm font-medium hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                autoFocus
+                onClick={() => {
+                  trashActivity(confirmTrash.categoryName, confirmTrash.activity, confirmTrash.color);
+                  setConfirmTrash(null);
+                }}
+                className="px-3 py-1.5 rounded-lg bg-red-600 text-white text-sm font-medium hover:bg-red-700"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
