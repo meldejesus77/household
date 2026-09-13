@@ -78,6 +78,39 @@ async function deleteTripApi(id: string) {
   await fetch(`/api/packing/trips/${id}`, { method: "DELETE" });
 }
 
+// ── localStorage cache ────────────────────────────────────────────────────────
+// Trip state is mirrored to localStorage on every change so it survives page
+// reloads, cross-nav to other routes, and full remounts of PackingClient.
+
+function localKey(tripId: string) {
+  return `packing:trip:${tripId}`;
+}
+
+function readLocalTrip(tripId: string): Trip | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(localKey(tripId));
+    if (!raw) return null;
+    return JSON.parse(raw) as Trip;
+  } catch {
+    return null;
+  }
+}
+
+function writeLocalTrip(trip: Trip) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(localKey(trip.id), JSON.stringify(trip));
+  } catch {}
+}
+
+function clearLocalTrip(tripId: string) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.removeItem(localKey(tripId));
+  } catch {}
+}
+
 // ── Progress helpers ─────────────────────────────────────────────────────────
 
 function collectItemIds(tab: TabDef): string[] {
@@ -139,11 +172,14 @@ export default function PackingClient() {
     setTripCache((cache) => {
       const existing = cache[tripId];
       if (!existing) return cache;
-      return { ...cache, [tripId]: updater(existing) };
+      const next = updater(existing);
+      writeLocalTrip(next);
+      return { ...cache, [tripId]: next };
     });
   }, []);
 
   const seedCachedTrip = useCallback((trip: Trip) => {
+    writeLocalTrip(trip);
     setTripCache((cache) => ({ ...cache, [trip.id]: trip }));
   }, []);
 
@@ -160,6 +196,7 @@ export default function PackingClient() {
       const { [id]: _, ...rest } = cache;
       return rest;
     });
+    clearLocalTrip(id);
     goHub();
   }, [goHub]);
 
@@ -378,47 +415,22 @@ function TripView({
   const [activeTabId, setActiveTabId] = useState<string>("hub");
   const [activeUser, setActiveUser] = useState<UserId>("mel");
   const [editMode, setEditMode] = useState(false);
-  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const latestTripRef = useRef<{ id: string; state: Record<string, boolean> } | null>(null);
-  const didFetchRef = useRef(false);
+  const didLoadRef = useRef(false);
 
-  // Fetch on first entry to this trip if we don't have it cached yet.
+  // On first entry to this trip in this PackingClient instance, seed the cache
+  // from localStorage (fast, offline-safe). Fetch from server in parallel and
+  // update if server has newer data — but never overwrite unsynced local edits
+  // during this session. In practice, localStorage is source of truth.
   useEffect(() => {
-    if (cachedTrip || didFetchRef.current) return;
-    didFetchRef.current = true;
+    if (cachedTrip || didLoadRef.current) return;
+    didLoadRef.current = true;
+    const local = readLocalTrip(tripId);
+    if (local) {
+      seedCachedTrip(local);
+      return;
+    }
     fetchTrip(tripId).then((t) => seedCachedTrip(t)).catch(() => {});
   }, [tripId, cachedTrip, seedCachedTrip]);
-
-  // Debounced save of state to server. We save the cached trip's state; the
-  // cache in the parent is what the UI actually renders from.
-  useEffect(() => {
-    if (!trip) return;
-    latestTripRef.current = { id: trip.id, state: trip.state };
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => {
-      saveTripState(trip.id, trip.state).catch(() => {});
-      saveTimer.current = null;
-    }, 700);
-  }, [trip]);
-
-  // Flush pending save on unmount + on page hide (browser back, tab close, iOS
-  // swipe-away). Cache in parent already has the latest state, so the visible
-  // check-loss bug is gone regardless of whether this save round-trip wins —
-  // this just ensures durability across full page reloads.
-  useEffect(() => {
-    function flush() {
-      if (saveTimer.current && latestTripRef.current) {
-        clearTimeout(saveTimer.current);
-        saveTimer.current = null;
-        saveTripState(latestTripRef.current.id, latestTripRef.current.state).catch(() => {});
-      }
-    }
-    window.addEventListener("pagehide", flush);
-    return () => {
-      window.removeEventListener("pagehide", flush);
-      flush();
-    };
-  }, []);
 
   const applicableShared = useMemo(
     () => templates.shared.filter((t) => !t.onlyWhenCamping || (trip?.camping ?? false)),
@@ -451,6 +463,9 @@ function TripView({
       const next = { ...prev.state };
       if (val) next[key] = true;
       else delete next[key];
+      // Fire server save immediately. localStorage was already written by
+      // setCachedTrip, so this call is best-effort backup.
+      saveTripState(tripId, next).catch(() => {});
       return { ...prev, state: next };
     });
   }, [tripId, setCachedTrip]);
@@ -462,6 +477,7 @@ function TripView({
         if (val) next[key] = true;
         else delete next[key];
       }
+      saveTripState(tripId, next).catch(() => {});
       return { ...prev, state: next };
     });
   }, [tripId, setCachedTrip]);
