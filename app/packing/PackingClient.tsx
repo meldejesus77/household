@@ -108,6 +108,10 @@ export default function PackingClient() {
   const [view, setView] = useState<View>({ kind: "hub" });
   const [templates, setTemplates] = useState<Templates | null>(null);
   const [trips, setTrips] = useState<TripMeta[] | null>(null);
+  // Cache of full trip data (with state). Populated on first open of a trip.
+  // Used as the source of truth for that trip for the rest of the session so
+  // leaving + returning doesn't re-fetch (which can race an in-flight save).
+  const [tripCache, setTripCache] = useState<Record<string, Trip>>({});
 
   // Load templates + trip list on mount.
   useEffect(() => {
@@ -131,14 +135,31 @@ export default function PackingClient() {
     saveTemplate(scope, next).catch(() => {});
   }, []);
 
+  const setCachedTrip = useCallback((tripId: string, updater: (t: Trip) => Trip) => {
+    setTripCache((cache) => {
+      const existing = cache[tripId];
+      if (!existing) return cache;
+      return { ...cache, [tripId]: updater(existing) };
+    });
+  }, []);
+
+  const seedCachedTrip = useCallback((trip: Trip) => {
+    setTripCache((cache) => ({ ...cache, [trip.id]: trip }));
+  }, []);
+
   // Called after creating a new trip so hub is up to date on return.
   const onTripCreated = useCallback((trip: Trip) => {
     setTrips((prev) => (prev ? [trip, ...prev] : [trip]));
+    seedCachedTrip(trip);
     goTrip(trip.id);
-  }, [goTrip]);
+  }, [goTrip, seedCachedTrip]);
 
   const onTripDeleted = useCallback((id: string) => {
     setTrips((prev) => (prev ? prev.filter((t) => t.id !== id) : prev));
+    setTripCache((cache) => {
+      const { [id]: _, ...rest } = cache;
+      return rest;
+    });
     goHub();
   }, [goHub]);
 
@@ -155,6 +176,9 @@ export default function PackingClient() {
   return (
     <TripView
       tripId={view.tripId}
+      cachedTrip={tripCache[view.tripId] ?? null}
+      setCachedTrip={setCachedTrip}
+      seedCachedTrip={seedCachedTrip}
       templates={templates}
       updateTemplate={updateTemplate}
       onBack={goHub}
@@ -333,34 +357,43 @@ function NewTripView({
 
 function TripView({
   tripId,
+  cachedTrip,
+  setCachedTrip,
+  seedCachedTrip,
   templates,
   updateTemplate,
   onBack,
   onDeleted,
 }: {
   tripId: string;
+  cachedTrip: Trip | null;
+  setCachedTrip: (tripId: string, updater: (t: Trip) => Trip) => void;
+  seedCachedTrip: (t: Trip) => void;
   templates: Templates;
   updateTemplate: (scope: Scope, next: TabDef[]) => void;
   onBack: () => void;
   onDeleted: (id: string) => void;
 }) {
-  const [trip, setTrip] = useState<Trip | null>(null);
+  const trip = cachedTrip;
   const [activeTabId, setActiveTabId] = useState<string>("hub");
   const [activeUser, setActiveUser] = useState<UserId>("mel");
   const [editMode, setEditMode] = useState(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const firstStateChange = useRef(true);
   const latestTripRef = useRef<{ id: string; state: Record<string, boolean> } | null>(null);
+  const didFetchRef = useRef(false);
 
+  // Fetch on first entry to this trip if we don't have it cached yet.
   useEffect(() => {
-    fetchTrip(tripId).then(setTrip).catch(() => setTrip(null));
-  }, [tripId]);
+    if (cachedTrip || didFetchRef.current) return;
+    didFetchRef.current = true;
+    fetchTrip(tripId).then((t) => seedCachedTrip(t)).catch(() => {});
+  }, [tripId, cachedTrip, seedCachedTrip]);
 
-  // Debounced save of state to server.
+  // Debounced save of state to server. We save the cached trip's state; the
+  // cache in the parent is what the UI actually renders from.
   useEffect(() => {
     if (!trip) return;
     latestTripRef.current = { id: trip.id, state: trip.state };
-    if (firstStateChange.current) { firstStateChange.current = false; return; }
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
       saveTripState(trip.id, trip.state).catch(() => {});
@@ -368,9 +401,10 @@ function TripView({
     }, 700);
   }, [trip]);
 
-  // Flush any pending debounced save on unmount (leaving the trip view) or on
-  // page hide (browser back, tab close, iOS Safari swipe-away). Without this,
-  // a check made <700ms before leaving is lost.
+  // Flush pending save on unmount + on page hide (browser back, tab close, iOS
+  // swipe-away). Cache in parent already has the latest state, so the visible
+  // check-loss bug is gone regardless of whether this save round-trip wins —
+  // this just ensures durability across full page reloads.
   useEffect(() => {
     function flush() {
       if (saveTimer.current && latestTripRef.current) {
@@ -413,18 +447,16 @@ function TripView({
   }
 
   const setStateItem = useCallback((key: string, val: boolean) => {
-    setTrip((prev) => {
-      if (!prev) return prev;
+    setCachedTrip(tripId, (prev) => {
       const next = { ...prev.state };
       if (val) next[key] = true;
       else delete next[key];
       return { ...prev, state: next };
     });
-  }, []);
+  }, [tripId, setCachedTrip]);
 
   const setManyState = useCallback((updates: { key: string; val: boolean }[]) => {
-    setTrip((prev) => {
-      if (!prev) return prev;
+    setCachedTrip(tripId, (prev) => {
       const next = { ...prev.state };
       for (const { key, val } of updates) {
         if (val) next[key] = true;
@@ -432,7 +464,7 @@ function TripView({
       }
       return { ...prev, state: next };
     });
-  }, []);
+  }, [tripId, setCachedTrip]);
 
   async function handleDeleteTrip() {
     if (!trip) return;
