@@ -51,7 +51,7 @@ async function fetchTrips(): Promise<TripMeta[]> {
 }
 
 async function fetchTrip(id: string): Promise<Trip> {
-  const r = await fetch(`/api/packing/trips/${id}`);
+  const r = await fetch(`/api/packing/trips/${id}`, { cache: 'no-store' });
   return r.json();
 }
 
@@ -65,10 +65,12 @@ async function createTrip(input: { name: string; tripDate: string; camping: bool
 }
 
 async function saveTripState(id: string, state: Record<string, boolean>) {
+  // keepalive lets the request survive page unload / tab close.
   await fetch(`/api/packing/trips/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ state }),
+    keepalive: true,
   });
 }
 
@@ -366,15 +368,21 @@ function TripView({
     }, 700);
   }, [trip]);
 
-  // Flush any pending debounced save on unmount so leaving the trip mid-debounce
-  // doesn't drop the last check.
+  // Flush any pending debounced save on unmount (leaving the trip view) or on
+  // page hide (browser back, tab close, iOS Safari swipe-away). Without this,
+  // a check made <700ms before leaving is lost.
   useEffect(() => {
-    return () => {
+    function flush() {
       if (saveTimer.current && latestTripRef.current) {
         clearTimeout(saveTimer.current);
         saveTimer.current = null;
         saveTripState(latestTripRef.current.id, latestTripRef.current.state).catch(() => {});
       }
+    }
+    window.addEventListener("pagehide", flush);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      flush();
     };
   }, []);
 
