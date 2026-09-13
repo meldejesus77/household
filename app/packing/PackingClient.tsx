@@ -348,6 +348,7 @@ function TripView({
   const [editMode, setEditMode] = useState(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const firstStateChange = useRef(true);
+  const latestTripRef = useRef<{ id: string; state: Record<string, boolean> } | null>(null);
 
   useEffect(() => {
     fetchTrip(tripId).then(setTrip).catch(() => setTrip(null));
@@ -356,13 +357,26 @@ function TripView({
   // Debounced save of state to server.
   useEffect(() => {
     if (!trip) return;
+    latestTripRef.current = { id: trip.id, state: trip.state };
     if (firstStateChange.current) { firstStateChange.current = false; return; }
     if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => saveTripState(trip.id, trip.state).catch(() => {}), 700);
-    return () => {
-      if (saveTimer.current) clearTimeout(saveTimer.current);
-    };
+    saveTimer.current = setTimeout(() => {
+      saveTripState(trip.id, trip.state).catch(() => {});
+      saveTimer.current = null;
+    }, 700);
   }, [trip]);
+
+  // Flush any pending debounced save on unmount so leaving the trip mid-debounce
+  // doesn't drop the last check.
+  useEffect(() => {
+    return () => {
+      if (saveTimer.current && latestTripRef.current) {
+        clearTimeout(saveTimer.current);
+        saveTimer.current = null;
+        saveTripState(latestTripRef.current.id, latestTripRef.current.state).catch(() => {});
+      }
+    };
+  }, []);
 
   const applicableShared = useMemo(
     () => templates.shared.filter((t) => !t.onlyWhenCamping || (trip?.camping ?? false)),
