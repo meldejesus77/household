@@ -52,12 +52,16 @@ model PackingTemplate {
 
 // One row per trip. `state` is a flat { key -> true } check-map. Keys are of
 // the form "<scope>:<itemId>" where scope is "shared" | "mel" | "kathy".
+//
+// `overrides` is a per-trip layer applied over the live master template:
+// hidden master items, per-item text overrides, and trip-only extra items.
 model PackingTrip {
   id        String   @id @default(cuid())
   name      String
   tripDate  DateTime
   camping   Boolean  @default(false)
   state     Json
+  overrides Json?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }

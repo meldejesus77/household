@@ -16,7 +16,7 @@ export async function GET(_req: Request, ctx: Ctx) {
   }
 }
 
-// PUT /api/packing/trips/[id]  body: { name?, tripDate?, camping?, state? }
+// PUT /api/packing/trips/[id]  body: { name?, tripDate?, camping?, state?, overrides? }
 export async function PUT(req: Request, ctx: Ctx) {
   try {
     const { id } = await ctx.params;
@@ -26,6 +26,7 @@ export async function PUT(req: Request, ctx: Ctx) {
     if (body.tripDate) data.tripDate = new Date(body.tripDate);
     if (typeof body.camping === 'boolean') data.camping = body.camping;
     if (body.state && typeof body.state === 'object') data.state = body.state;
+    if (body.overrides !== undefined) data.overrides = body.overrides;
     const trip = await prisma.packingTrip.update({ where: { id }, data });
     return NextResponse.json(trip);
   } catch (e) {

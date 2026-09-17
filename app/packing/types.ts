@@ -70,8 +70,27 @@ export type TripMeta = {
   updatedAt: string;
 };
 
+// Per-trip layer applied over the live master template.
+// - hiddenItemIds: master items removed for this trip only.
+// - itemTextOverrides: itemId -> replacement text for this trip only.
+// - extraItems: containerId (section id or car-zone id) -> items added just for this trip.
+export type TripOverrides = {
+  version: 1;
+  hiddenItemIds: string[];
+  itemTextOverrides: Record<string, string>;
+  extraItems: Record<string, ItemDef[]>;
+};
+
+export const EMPTY_OVERRIDES: TripOverrides = {
+  version: 1,
+  hiddenItemIds: [],
+  itemTextOverrides: {},
+  extraItems: {},
+};
+
 export type Trip = TripMeta & {
   state: Record<string, boolean>;
+  overrides: TripOverrides | null;
 };
 
 // Short random id for items/sections/etc. Stable across the lifetime of a

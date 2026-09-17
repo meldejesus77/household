@@ -9,6 +9,7 @@ import {
 import {
   rid,
   stateKey,
+  EMPTY_OVERRIDES,
   type TabDef,
   type SectionDef,
   type CarDef,
@@ -17,7 +18,10 @@ import {
   type Templates,
   type TripMeta,
   type Trip,
+  type TripOverrides,
 } from "./types";
+
+type EditScope = "trip" | "master";
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -74,6 +78,15 @@ async function saveTripState(id: string, state: Record<string, boolean>) {
   });
 }
 
+async function saveTripOverrides(id: string, overrides: TripOverrides) {
+  await fetch(`/api/packing/trips/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ overrides }),
+    keepalive: true,
+  });
+}
+
 async function deleteTripApi(id: string) {
   await fetch(`/api/packing/trips/${id}`, { method: "DELETE" });
 }
@@ -109,6 +122,46 @@ function clearLocalTrip(tripId: string) {
   try {
     localStorage.removeItem(localKey(tripId));
   } catch {}
+}
+
+// ── Overrides ────────────────────────────────────────────────────────────────
+// Layer a trip's per-trip overrides onto the live master tab. Item ids stay
+// stable across text overrides, so trip.state keys keep working.
+
+function applyItemOverrides(items: ItemDef[], containerId: string, ov: TripOverrides): ItemDef[] {
+  const kept = items
+    .filter((it) => !ov.hiddenItemIds.includes(it.id))
+    .map((it) => ({ id: it.id, text: ov.itemTextOverrides[it.id] ?? it.text }));
+  const extras = ov.extraItems[containerId] ?? [];
+  return [...kept, ...extras];
+}
+
+function applyOverrides(tab: TabDef, ov: TripOverrides): TabDef {
+  if (tab.sections) {
+    return {
+      ...tab,
+      sections: tab.sections.map((sec) => ({
+        ...sec,
+        items: applyItemOverrides(sec.items, sec.id, ov),
+      })),
+    };
+  }
+  if (tab.cars) {
+    return {
+      ...tab,
+      cars: tab.cars.map((car) => ({
+        ...car,
+        sections: car.sections.map((csec) => ({
+          ...csec,
+          zones: csec.zones.map((zone) => ({
+            ...zone,
+            items: applyItemOverrides(zone.items, zone.id, ov),
+          })),
+        })),
+      })),
+    };
+  }
+  return tab;
 }
 
 // ── Progress helpers ─────────────────────────────────────────────────────────
@@ -415,7 +468,16 @@ function TripView({
   const [activeTabId, setActiveTabId] = useState<string>("hub");
   const [activeUser, setActiveUser] = useState<UserId>("mel");
   const [editMode, setEditMode] = useState(false);
+  const [editScope, setEditScope] = useState<EditScope>("trip");
   const didLoadRef = useRef(false);
+
+  // Reset scope back to safest default whenever edit mode is exited, so the
+  // next edit session doesn't silently inherit "master" from a previous one.
+  useEffect(() => {
+    if (!editMode) setEditScope("trip");
+  }, [editMode]);
+
+  const currentOverrides: TripOverrides = trip?.overrides ?? EMPTY_OVERRIDES;
 
   // On first entry to this trip in this PackingClient instance, seed the cache
   // from localStorage (fast, offline-safe). Fetch from server in parallel and
@@ -502,12 +564,12 @@ function TripView({
     type TabCard = { id: string; label: string; color: string; scope: Scope; tab: TabDef; isPerUser: boolean };
     const cards: TabCard[] = [];
     for (const t of applicableShared) {
-      cards.push({ id: t.id, label: t.label, color: t.color, scope: "shared", tab: t, isPerUser: false });
+      cards.push({ id: t.id, label: t.label, color: t.color, scope: "shared", tab: applyOverrides(t, currentOverrides), isPerUser: false });
     }
     // Per-user cards: show one card per unique per-user tab id, using activeUser's template.
     for (const id of perUserTabIds) {
       const t = findUserTab(activeUser, id);
-      if (t) cards.push({ id: t.id, label: t.label, color: t.color, scope: activeUser, tab: t, isPerUser: true });
+      if (t) cards.push({ id: t.id, label: t.label, color: t.color, scope: activeUser, tab: applyOverrides(t, currentOverrides), isPerUser: true });
     }
 
     return (
@@ -610,6 +672,111 @@ function TripView({
     }
   }
 
+  const effectiveTab: TabDef = applyOverrides(tab, currentOverrides);
+
+  function mutateOverrides(mut: (ov: TripOverrides) => TripOverrides) {
+    setCachedTrip(tripId, (prev) => {
+      const nextOv = mut(prev.overrides ?? EMPTY_OVERRIDES);
+      saveTripOverrides(tripId, nextOv).catch(() => {});
+      return { ...prev, overrides: nextOv };
+    });
+  }
+
+  // Master-scope mutations: rebuild the master tab with the change applied,
+  // then push via updateThisTab (which persists via /api/packing/templates).
+  // Capture `tab` under an explicit non-null type so the closure below
+  // doesn't lose the narrowing from `if (!tab) return` above.
+  const masterTab: TabDef = tab;
+  function applyMasterItemChange(fn: (items: ItemDef[]) => ItemDef[], containerId: string) {
+    if (masterTab.sections) {
+      const nextTab: TabDef = {
+        ...masterTab,
+        sections: masterTab.sections.map((s) => (s.id === containerId ? { ...s, items: fn(s.items) } : s)),
+      };
+      updateThisTab(nextTab);
+      return;
+    }
+    if (masterTab.cars) {
+      const nextTab: TabDef = {
+        ...masterTab,
+        cars: masterTab.cars.map((car) => ({
+          ...car,
+          sections: car.sections.map((csec) => ({
+            ...csec,
+            zones: csec.zones.map((z) => (z.id === containerId ? { ...z, items: fn(z.items) } : z)),
+          })),
+        })),
+      };
+      updateThisTab(nextTab);
+    }
+  }
+
+  function onAddItem(containerId: string, text: string) {
+    if (editScope === "master") {
+      const newItem: ItemDef = { id: rid(), text };
+      applyMasterItemChange((items) => [...items, newItem], containerId);
+      return;
+    }
+    const newItem: ItemDef = { id: rid(), text };
+    mutateOverrides((ov) => ({
+      ...ov,
+      extraItems: { ...ov.extraItems, [containerId]: [...(ov.extraItems[containerId] ?? []), newItem] },
+    }));
+  }
+
+  function onEditItemText(containerId: string, itemId: string, text: string) {
+    if (editScope === "master") {
+      applyMasterItemChange(
+        (items) => items.map((it) => (it.id === itemId ? { ...it, text } : it)),
+        containerId,
+      );
+      return;
+    }
+    mutateOverrides((ov) => {
+      const bucket = ov.extraItems[containerId];
+      // Trip-added item — edit in place.
+      if (bucket && bucket.some((it) => it.id === itemId)) {
+        return {
+          ...ov,
+          extraItems: { ...ov.extraItems, [containerId]: bucket.map((it) => (it.id === itemId ? { ...it, text } : it)) },
+        };
+      }
+      // Master item — record text override.
+      return { ...ov, itemTextOverrides: { ...ov.itemTextOverrides, [itemId]: text } };
+    });
+  }
+
+  function onRemoveItem(containerId: string, itemId: string) {
+    if (editScope === "master") {
+      applyMasterItemChange((items) => items.filter((it) => it.id !== itemId), containerId);
+      // Sweep this trip's overrides for the deleted id.
+      mutateOverrides((ov) => {
+        const { [itemId]: _dropped, ...restText } = ov.itemTextOverrides;
+        return {
+          ...ov,
+          hiddenItemIds: ov.hiddenItemIds.filter((id) => id !== itemId),
+          itemTextOverrides: restText,
+        };
+      });
+      return;
+    }
+    mutateOverrides((ov) => {
+      const bucket = ov.extraItems[containerId];
+      if (bucket && bucket.some((it) => it.id === itemId)) {
+        const nextBucket = bucket.filter((it) => it.id !== itemId);
+        const nextExtras = { ...ov.extraItems };
+        if (nextBucket.length === 0) delete nextExtras[containerId];
+        else nextExtras[containerId] = nextBucket;
+        const { [itemId]: _dropped, ...restText } = ov.itemTextOverrides;
+        return { ...ov, extraItems: nextExtras, itemTextOverrides: restText };
+      }
+      if (ov.hiddenItemIds.includes(itemId)) return ov;
+      return { ...ov, hiddenItemIds: [...ov.hiddenItemIds, itemId] };
+    });
+  }
+
+  const showMasterOnlyAffordances = editMode && editScope === "master";
+
   return (
     <div style={{ background: BG, minHeight: "100vh", paddingBottom: 40 }}>
       <div style={{ maxWidth: 680, margin: "0 auto" }}>
@@ -628,6 +795,34 @@ function TripView({
           </button>
         </div>
 
+        {editMode && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 12px 8px", fontSize: 12, color: "#666" }}>
+            <span>Editing:</span>
+            <div style={{ display: "inline-flex", background: "#fff", border: `1px solid ${tab.color}`, borderRadius: 6, overflow: "hidden" }}>
+              {(["trip", "master"] as const).map((s) => (
+                <button
+                  key={s}
+                  onClick={() => setEditScope(s)}
+                  style={{
+                    background: editScope === s ? tab.color : "#fff",
+                    color: editScope === s ? "#fff" : tab.color,
+                    border: "none",
+                    padding: "5px 12px",
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                >
+                  {s === "trip" ? "This trip" : "Master"}
+                </button>
+              ))}
+            </div>
+            <span style={{ fontSize: 11, color: "#999" }}>
+              {editScope === "trip" ? "Changes affect only this trip." : "Changes affect all future trips."}
+            </span>
+          </div>
+        )}
+
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px 14px" }}>
           <h2 style={{ fontSize: 18, fontWeight: 600, color: tab.color, margin: 0 }}>
             {tab.label}
@@ -637,19 +832,22 @@ function TripView({
         </div>
 
         <div style={{ padding: "0 12px" }}>
-          {tab.cars ? (
+          {effectiveTab.cars ? (
             <CarView
-              tab={tab}
+              tab={effectiveTab}
               scope={scope}
               state={trip.state}
               onSet={setStateItem}
               onSetMany={setManyState}
               editMode={editMode}
               onChange={updateThisTab}
+              onAddItem={onAddItem}
+              onEditItemText={onEditItemText}
+              onRemoveItem={onRemoveItem}
             />
           ) : (
             <>
-              {(tab.sections ?? []).map((sec) => (
+              {(effectiveTab.sections ?? []).map((sec) => (
                 <SectionView
                   key={sec.id}
                   section={sec}
@@ -659,10 +857,18 @@ function TripView({
                   onSet={setStateItem}
                   onSetMany={setManyState}
                   editMode={editMode}
+                  showSectionDelete={showMasterOnlyAffordances}
+                  onAddItem={(text) => onAddItem(sec.id, text)}
+                  onEditItemText={(itemId, text) => onEditItemText(sec.id, itemId, text)}
+                  onRemoveItem={(itemId) => onRemoveItem(sec.id, itemId)}
                   onChange={(nextSec) => {
+                    // Section-title/color edits are master-only; don't spread
+                    // items (they'd carry trip overrides into the master row).
                     const nextTab: TabDef = {
                       ...tab,
-                      sections: (tab.sections ?? []).map((s) => (s.id === nextSec.id ? nextSec : s)),
+                      sections: (tab.sections ?? []).map((s) =>
+                        s.id === nextSec.id ? { ...s, title: nextSec.title, color: nextSec.color } : s,
+                      ),
                     };
                     updateThisTab(nextTab);
                   }}
@@ -676,7 +882,7 @@ function TripView({
                   }}
                 />
               ))}
-              {editMode && (
+              {showMasterOnlyAffordances && (
                 <AddSectionRow
                   onAdd={(title) => {
                     const nextTab: TabDef = {
@@ -732,8 +938,12 @@ function SectionView({
   onSet,
   onSetMany,
   editMode,
+  showSectionDelete,
   onChange,
   onDelete,
+  onAddItem,
+  onEditItemText,
+  onRemoveItem,
 }: {
   section: SectionDef;
   tabColor: string;
@@ -742,8 +952,12 @@ function SectionView({
   onSet: (key: string, val: boolean) => void;
   onSetMany: (updates: { key: string; val: boolean }[]) => void;
   editMode: boolean;
+  showSectionDelete: boolean;
   onChange: (next: SectionDef) => void;
   onDelete: () => void;
+  onAddItem: (text: string) => void;
+  onEditItemText: (itemId: string, text: string) => void;
+  onRemoveItem: (itemId: string) => void;
 }) {
   const color = section.color || tabColor;
   const items = section.items;
@@ -784,14 +998,14 @@ function SectionView({
             <span style={{ fontSize: 12, color: "#999", fontWeight: 500 }}>{checkedCount} / {items.length}</span>
             <Caret rotated={isCollapsed} />
           </>
-        ) : (
+        ) : showSectionDelete ? (
           <button
             onClick={onDelete}
             style={{ background: "none", border: "1px solid #f5b7b1", borderRadius: 4, padding: "4px 8px", fontSize: 11, color: "#a22", cursor: "pointer" }}
           >
             Delete
           </button>
-        )}
+        ) : null}
       </div>
 
       <div style={{ overflow: "hidden", maxHeight: isCollapsed ? 0 : 6000, opacity: isCollapsed ? 0 : 1, transition: "max-height 0.3s ease, opacity 0.3s" }}>
@@ -822,13 +1036,11 @@ function SectionView({
                     <input
                       type="text"
                       value={item.text}
-                      onChange={(e) => onChange({ ...section, items: items.map((it) => (it.id === item.id ? { ...it, text: e.target.value } : it)) })}
+                      onChange={(e) => onEditItemText(item.id, e.target.value)}
                       style={{ flex: 1, fontSize: 14, border: "1px solid #e0ddd8", borderRadius: 4, padding: "4px 6px" }}
                     />
                     <button
-                      onClick={() => {
-                        onChange({ ...section, items: items.filter((it) => it.id !== item.id) });
-                      }}
+                      onClick={() => onRemoveItem(item.id)}
                       style={{ background: "none", border: "none", color: "#a22", fontSize: 16, cursor: "pointer", padding: "0 4px" }}
                       aria-label="Remove item"
                     >
@@ -841,9 +1053,7 @@ function SectionView({
           })}
 
           {editMode && (
-            <AddItemRow
-              onAdd={(text) => onChange({ ...section, items: [...items, { id: rid(), text }] })}
-            />
+            <AddItemRow onAdd={(text) => onAddItem(text)} />
           )}
 
           {!editMode && items.length > 0 && (
@@ -970,6 +1180,9 @@ function CarView({
   onSetMany,
   editMode,
   onChange,
+  onAddItem,
+  onEditItemText,
+  onRemoveItem,
 }: {
   tab: TabDef;
   scope: Scope;
@@ -978,6 +1191,9 @@ function CarView({
   onSetMany: (updates: { key: string; val: boolean }[]) => void;
   editMode: boolean;
   onChange: (nextTab: TabDef) => void;
+  onAddItem: (containerId: string, text: string) => void;
+  onEditItemText: (containerId: string, itemId: string, text: string) => void;
+  onRemoveItem: (containerId: string, itemId: string) => void;
 }) {
   const cars = tab.cars ?? [];
 
@@ -1018,14 +1234,21 @@ function CarView({
                   onSetMany={onSetMany}
                   editMode={editMode}
                   onChange={(nextZone) => {
+                    // Zone-label edits are master-only; only merge the label,
+                    // never items (they'd carry trip overrides into master).
                     const nextCar: CarDef = {
                       ...car,
                       sections: car.sections.map((s) =>
-                        s.id !== csec.id ? s : { ...s, zones: s.zones.map((z) => (z.id === nextZone.id ? nextZone : z)) },
+                        s.id !== csec.id
+                          ? s
+                          : { ...s, zones: s.zones.map((z) => (z.id === nextZone.id ? { ...z, label: nextZone.label } : z)) },
                       ),
                     };
                     updateCar(nextCar);
                   }}
+                  onAddItem={(text) => onAddItem(zone.id, text)}
+                  onEditItemText={(itemId, text) => onEditItemText(zone.id, itemId, text)}
+                  onRemoveItem={(itemId) => onRemoveItem(zone.id, itemId)}
                 />
               ))}
             </div>
@@ -1045,6 +1268,9 @@ function ZoneView({
   onSetMany,
   editMode,
   onChange,
+  onAddItem,
+  onEditItemText,
+  onRemoveItem,
 }: {
   zone: { id: string; label: string; items: ItemDef[] };
   carColor: string;
@@ -1054,6 +1280,9 @@ function ZoneView({
   onSetMany: (updates: { key: string; val: boolean }[]) => void;
   editMode: boolean;
   onChange: (next: { id: string; label: string; items: ItemDef[] }) => void;
+  onAddItem: (text: string) => void;
+  onEditItemText: (itemId: string, text: string) => void;
+  onRemoveItem: (itemId: string) => void;
 }) {
   const items = zone.items;
   const checkedCount = items.filter((it) => state[stateKey(scope, it.id)]).length;
@@ -1119,11 +1348,11 @@ function ZoneView({
                     <input
                       type="text"
                       value={item.text}
-                      onChange={(e) => onChange({ ...zone, items: items.map((it) => (it.id === item.id ? { ...it, text: e.target.value } : it)) })}
+                      onChange={(e) => onEditItemText(item.id, e.target.value)}
                       style={{ flex: 1, fontSize: 14, border: "1px solid #e0ddd8", borderRadius: 4, padding: "4px 6px" }}
                     />
                     <button
-                      onClick={() => onChange({ ...zone, items: items.filter((it) => it.id !== item.id) })}
+                      onClick={() => onRemoveItem(item.id)}
                       style={{ background: "none", border: "none", color: "#a22", fontSize: 16, cursor: "pointer", padding: "0 4px" }}
                       aria-label="Remove item"
                     >
@@ -1135,7 +1364,7 @@ function ZoneView({
             );
           })}
           {editMode && (
-            <AddItemRow onAdd={(text) => onChange({ ...zone, items: [...items, { id: rid(), text }] })} />
+            <AddItemRow onAdd={(text) => onAddItem(text)} />
           )}
           {!editMode && items.length > 0 && (
             <li style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "6px 0", background: "#f5f3ef", borderTop: "1px solid #e8e5e0", marginTop: 4 }}>
