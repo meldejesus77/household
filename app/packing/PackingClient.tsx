@@ -291,7 +291,7 @@ function HubView({
   return (
     <div style={{ background: BG, minHeight: "100vh", paddingBottom: 40 }}>
       <div style={{ maxWidth: 680, margin: "0 auto", padding: "16px 12px 0" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, paddingRight: 48 }}>
           <h1 style={{ fontSize: 20, fontWeight: 600, color: "#2c2c2c", margin: 0 }}>Packing</h1>
           <button
             onClick={onNew}
@@ -470,6 +470,14 @@ function TripView({
   const [editMode, setEditMode] = useState(false);
   const [editScope, setEditScope] = useState<EditScope>("trip");
   const didLoadRef = useRef(false);
+  // Timestamp of the most recent local mutation (state or overrides) in this
+  // trip view. Used to protect an in-flight save from a server response that
+  // fires after we've already started mutating locally.
+  const lastLocalWriteRef = useRef(0);
+  // Timestamp when the mount-time server fetch was fired. On the response we
+  // compare against lastLocalWriteRef: if the user wrote anything after the
+  // fetch fired, we assume the local copy is fresher and skip the overwrite.
+  const fetchFiredAtRef = useRef(0);
 
   // Reset scope back to safest default whenever edit mode is exited, so the
   // next edit session doesn't silently inherit "master" from a previous one.
@@ -479,19 +487,26 @@ function TripView({
 
   const currentOverrides: TripOverrides = trip?.overrides ?? EMPTY_OVERRIDES;
 
-  // On first entry to this trip in this PackingClient instance, seed the cache
-  // from localStorage (fast, offline-safe). Fetch from server in parallel and
-  // update if server has newer data — but never overwrite unsynced local edits
-  // during this session. In practice, localStorage is source of truth.
+  // On first entry to this trip in this PackingClient instance:
+  //  1. seed from localStorage if present (instant paint, offline-safe)
+  //  2. ALWAYS fetch from server too — this is how cross-device sync works.
+  //     A different device may have added checks that never made it to this
+  //     device's localStorage. We adopt the server copy unless the user has
+  //     already made a local edit since the fetch fired.
   useEffect(() => {
-    if (cachedTrip || didLoadRef.current) return;
+    if (didLoadRef.current) return;
     didLoadRef.current = true;
-    const local = readLocalTrip(tripId);
-    if (local) {
-      seedCachedTrip(local);
-      return;
+    if (!cachedTrip) {
+      const local = readLocalTrip(tripId);
+      if (local) seedCachedTrip(local);
     }
-    fetchTrip(tripId).then((t) => seedCachedTrip(t)).catch(() => {});
+    fetchFiredAtRef.current = Date.now();
+    fetchTrip(tripId)
+      .then((serverTrip) => {
+        if (lastLocalWriteRef.current > fetchFiredAtRef.current) return;
+        seedCachedTrip(serverTrip);
+      })
+      .catch(() => {});
   }, [tripId, cachedTrip, seedCachedTrip]);
 
   const applicableShared = useMemo(
@@ -521,6 +536,7 @@ function TripView({
   }
 
   const setStateItem = useCallback((key: string, val: boolean) => {
+    lastLocalWriteRef.current = Date.now();
     setCachedTrip(tripId, (prev) => {
       const next = { ...prev.state };
       if (val) next[key] = true;
@@ -533,6 +549,7 @@ function TripView({
   }, [tripId, setCachedTrip]);
 
   const setManyState = useCallback((updates: { key: string; val: boolean }[]) => {
+    lastLocalWriteRef.current = Date.now();
     setCachedTrip(tripId, (prev) => {
       const next = { ...prev.state };
       for (const { key, val } of updates) {
@@ -575,7 +592,7 @@ function TripView({
     return (
       <div style={{ background: BG, minHeight: "100vh", paddingBottom: 40 }}>
         <div style={{ maxWidth: 680, margin: "0 auto", padding: "12px 0 0" }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 12px 8px" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 12px 8px", paddingRight: 60 }}>
             <button
               onClick={onBack}
               style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "none", border: "1px solid #d0ccc8", borderRadius: 6, padding: "7px 14px", fontSize: 13, color: "#555", cursor: "pointer" }}
@@ -675,6 +692,7 @@ function TripView({
   const effectiveTab: TabDef = applyOverrides(tab, currentOverrides);
 
   function mutateOverrides(mut: (ov: TripOverrides) => TripOverrides) {
+    lastLocalWriteRef.current = Date.now();
     setCachedTrip(tripId, (prev) => {
       const nextOv = mut(prev.overrides ?? EMPTY_OVERRIDES);
       saveTripOverrides(tripId, nextOv).catch(() => {});
@@ -780,7 +798,8 @@ function TripView({
   return (
     <div style={{ background: BG, minHeight: "100vh", paddingBottom: 40 }}>
       <div style={{ maxWidth: 680, margin: "0 auto" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 12px 4px" }}>
+        <div style={{ position: "sticky", top: 0, zIndex: 20, background: BG, paddingTop: 4, paddingBottom: 4, boxShadow: "0 1px 0 rgba(0,0,0,0.04)" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px 4px", paddingRight: 60 }}>
           <button
             onClick={() => setActiveTabId("hub")}
             style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "none", border: "1px solid #d0ccc8", borderRadius: 6, padding: "7px 14px", fontSize: 13, color: "#555", cursor: "pointer" }}
@@ -796,7 +815,7 @@ function TripView({
         </div>
 
         {editMode && (
-          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 12px 8px", fontSize: 12, color: "#666" }}>
+          <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8, padding: "0 12px 8px", fontSize: 12, color: "#666" }}>
             <span>Editing:</span>
             <div style={{ display: "inline-flex", background: "#fff", border: `1px solid ${tab.color}`, borderRadius: 6, overflow: "hidden" }}>
               {(["trip", "master"] as const).map((s) => (
@@ -822,6 +841,7 @@ function TripView({
             </span>
           </div>
         )}
+        </div>
 
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px 14px" }}>
           <h2 style={{ fontSize: 18, fontWeight: 600, color: tab.color, margin: 0 }}>
@@ -963,20 +983,24 @@ function SectionView({
   const items = section.items;
   const checkedCount = items.filter((it) => state[stateKey(scope, it.id)]).length;
   const allDone = items.length > 0 && checkedCount === items.length;
-  const [collapsed, setCollapsed] = useState<boolean>(false);
-  const isCollapsed = editMode ? false : allDone || collapsed;
+  // null → follow the "auto-collapse when all done" default. true/false → user
+  // has explicitly chosen; overrides allDone so tapping "All" doesn't hide the
+  // very checkbox the user just interacted with.
+  const [collapsedOverride, setCollapsedOverride] = useState<boolean | null>(null);
+  const isCollapsed = editMode ? false : (collapsedOverride ?? allDone);
 
   const allChecked = checkedCount === items.length && items.length > 0;
   const someChecked = checkedCount > 0 && !allChecked;
 
   function toggleAll(val: boolean) {
     onSetMany(items.map((it) => ({ key: stateKey(scope, it.id), val })));
+    if (val) setCollapsedOverride(false);
   }
 
   return (
     <div style={{ background: "#fff", borderRadius: 12, marginBottom: 10, overflow: "hidden", boxShadow: "0 1px 3px rgba(0,0,0,0.06)", opacity: allDone && !editMode ? 0.72 : 1, transition: "opacity 0.3s" }}>
       <div
-        onClick={() => !editMode && setCollapsed((v) => !v)}
+        onClick={() => !editMode && setCollapsedOverride(!isCollapsed)}
         style={{ display: "flex", alignItems: "center", gap: 10, padding: "13px 14px", cursor: editMode ? "default" : "pointer", userSelect: "none" }}
       >
         <span style={{ width: 11, height: 11, borderRadius: "50%", background: color, flexShrink: 0, display: "inline-block" }} />
@@ -1287,15 +1311,15 @@ function ZoneView({
   const items = zone.items;
   const checkedCount = items.filter((it) => state[stateKey(scope, it.id)]).length;
   const allDone = items.length > 0 && checkedCount === items.length;
-  const [collapsed, setCollapsed] = useState(false);
-  const isCollapsed = editMode ? false : allDone || collapsed;
+  const [collapsedOverride, setCollapsedOverride] = useState<boolean | null>(null);
+  const isCollapsed = editMode ? false : (collapsedOverride ?? allDone);
   const allChecked = checkedCount === items.length && items.length > 0;
   const someChecked = checkedCount > 0 && !allChecked;
 
   return (
     <div style={{ background: "#fff", borderRadius: 12, marginBottom: 10, overflow: "hidden", boxShadow: "0 1px 3px rgba(0,0,0,0.06)", opacity: allDone && !editMode ? 0.72 : 1 }}>
       <div
-        onClick={() => !editMode && setCollapsed((v) => !v)}
+        onClick={() => !editMode && setCollapsedOverride(!isCollapsed)}
         style={{ display: "flex", alignItems: "center", gap: 10, padding: "13px 14px", cursor: editMode ? "default" : "pointer", userSelect: "none" }}
       >
         <span style={{ width: 11, height: 11, borderRadius: "50%", background: carColor, flexShrink: 0, display: "inline-block" }} />
@@ -1373,7 +1397,10 @@ function ZoneView({
                 id={`${zone.id}-all`}
                 checked={allChecked}
                 ref={(el) => { if (el) el.indeterminate = someChecked; }}
-                onChange={(e) => onSetMany(items.map((it) => ({ key: stateKey(scope, it.id), val: e.target.checked })))}
+                onChange={(e) => {
+                  onSetMany(items.map((it) => ({ key: stateKey(scope, it.id), val: e.target.checked })));
+                  if (e.target.checked) setCollapsedOverride(false);
+                }}
                 style={{ marginTop: 2, flexShrink: 0, width: 16, height: 16, cursor: "pointer", accentColor: "#555" }}
               />
               <label htmlFor={`${zone.id}-all`} style={{ fontSize: "0.82rem", color: "#888", fontStyle: "italic", cursor: "pointer" }}>All</label>
